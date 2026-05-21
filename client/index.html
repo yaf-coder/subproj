@@ -69,7 +69,56 @@
       button:disabled { opacity: 0.5; cursor: default; }
       .btn-row { display: flex; gap: 8px; }
       .btn-row > * { flex: 1; }
+      main { position: relative; height: 100%; }
       #map { width: 100%; height: 100%; }
+      #playback-bar {
+        position: absolute;
+        left: 16px;
+        right: 16px;
+        bottom: 16px;
+        padding: 10px 12px;
+        background: rgba(11, 17, 23, 0.85);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        backdrop-filter: blur(6px);
+        -webkit-backdrop-filter: blur(6px);
+        font-size: 12px;
+        color: var(--text);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+      }
+      .pb-row { display: flex; align-items: center; gap: 10px; }
+      .pb-row + .pb-row { margin-top: 8px; }
+      .pb-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+      .pb-time { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 78px; }
+      #pb-slider {
+        flex: 1;
+        accent-color: var(--accent);
+        background: transparent;
+        width: auto;
+        padding: 0;
+        border: none;
+      }
+      .pb-live-btn {
+        width: auto; padding: 4px 10px;
+        background: var(--accent-bad); color: #fff;
+        font-size: 11px; letter-spacing: 1px;
+        border-radius: 3px;
+      }
+      .pb-live-btn.live-active {
+        background: var(--accent-bad); color: #fff;
+      }
+      .pb-live-btn.scrubbing {
+        background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+      }
+      .pb-speed {
+        width: auto; padding: 3px 10px;
+        background: var(--panel-2); color: var(--text);
+        border: 1px solid var(--border); border-radius: 3px;
+        font-size: 11px; font-weight: 500;
+      }
+      .pb-speed.active {
+        background: var(--accent); color: #001827; border-color: var(--accent);
+      }
       .status { padding: 8px 16px; font-size: 11px; color: var(--muted); }
       .status.ok { color: var(--accent); }
       .status.warn { color: var(--accent-warn); }
@@ -119,7 +168,26 @@
         <div id="conn-status" class="status">disconnected</div>
       </aside>
 
-      <main><div id="map"></div></main>
+      <main>
+        <div id="map"></div>
+        <div id="playback-bar">
+          <div class="pb-row">
+            <button id="pb-live" class="pb-live-btn" title="Resume live view">LIVE</button>
+            <span class="pb-time" id="pb-time">t = 0.0 s</span>
+            <span class="pb-time" id="pb-time-total">/ 0.0 s</span>
+            <input id="pb-slider" type="range" min="0" max="0" value="0" step="1" />
+          </div>
+          <div class="pb-row pb-row-speeds">
+            <span class="pb-label">Speed</span>
+            <button class="pb-speed" data-speed="0.5">0.5×</button>
+            <button class="pb-speed active" data-speed="1">1×</button>
+            <button class="pb-speed" data-speed="2">2×</button>
+            <button class="pb-speed" data-speed="4">4×</button>
+            <button class="pb-speed" data-speed="8">8×</button>
+            <button class="pb-speed" data-speed="16">16×</button>
+          </div>
+        </div>
+      </main>
 
       <aside class="panel right">
         <h2>Live telemetry</h2>

@@ -50,6 +50,20 @@ export function initMap(container: HTMLElement, onClick: (lng: number, lat: numb
         "line-dasharray": [2, 2],
       },
     });
+    map.addSource("route-waypoints", { type: "geojson", data: emptyFC() });
+    map.addLayer({
+      id: "route-waypoints-dots",
+      type: "circle",
+      source: "route-waypoints",
+      paint: {
+        "circle-radius": 3,
+        "circle-color": "#4cc4ff",
+        "circle-opacity": 0.45,
+        "circle-stroke-color": "#001827",
+        "circle-stroke-width": 0.5,
+        "circle-stroke-opacity": 0.6,
+      },
+    });
     map.addSource("track", { type: "geojson", data: emptyLine() });
     map.addLayer({
       id: "track-line",
@@ -64,6 +78,9 @@ export function initMap(container: HTMLElement, onClick: (lng: number, lat: numb
   function emptyLine(): GeoJSON.FeatureCollection {
     return { type: "FeatureCollection", features: [] };
   }
+  function emptyFC(): GeoJSON.FeatureCollection {
+    return { type: "FeatureCollection", features: [] };
+  }
   function lineFC(coords: [number, number][]): GeoJSON.FeatureCollection {
     return {
       type: "FeatureCollection",
@@ -72,6 +89,16 @@ export function initMap(container: HTMLElement, onClick: (lng: number, lat: numb
         properties: {},
         geometry: { type: "LineString", coordinates: coords },
       }],
+    };
+  }
+  function pointsFC(coords: [number, number][]): GeoJSON.FeatureCollection {
+    return {
+      type: "FeatureCollection",
+      features: coords.map((c) => ({
+        type: "Feature",
+        properties: {},
+        geometry: { type: "Point", coordinates: c },
+      })),
     };
   }
 
@@ -109,11 +136,20 @@ export function initMap(container: HTMLElement, onClick: (lng: number, lat: numb
       goalMarker = ll ? new maplibregl.Marker({ element: colorPin("#ffa000") }).setLngLat(ll).addTo(map) : null;
     },
     setRoute(plan) {
-      const src = map.getSource("route") as maplibregl.GeoJSONSource | undefined;
-      if (!src) return;
-      if (!plan) { src.setData(emptyLine()); return; }
-      const coords: [number, number][] = plan.waypoints.map(w => [w.lon, w.lat]);
-      src.setData(lineFC(coords));
+      const lineSrc = map.getSource("route") as maplibregl.GeoJSONSource | undefined;
+      const wpSrc = map.getSource("route-waypoints") as maplibregl.GeoJSONSource | undefined;
+      if (!lineSrc || !wpSrc) return;
+      if (!plan) {
+        lineSrc.setData(emptyLine());
+        wpSrc.setData(emptyFC());
+        return;
+      }
+      const coords: [number, number][] = plan.waypoints.map((w) => [w.lon, w.lat]);
+      lineSrc.setData(lineFC(coords));
+      // Show waypoint dots but skip the very first (sits under the start pin)
+      // and the very last (sits under the goal pin).
+      const dotCoords = coords.length > 2 ? coords.slice(1, -1) : [];
+      wpSrc.setData(pointsFC(dotCoords));
     },
     setSub(lng, lat, heading_deg) {
       if (!subMarker) {

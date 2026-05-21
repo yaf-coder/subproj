@@ -1,5 +1,6 @@
 #pragma once
 
+#include "geo/land_mask.hpp"
 #include "sim/sim_manager.hpp"
 
 #include <string>
@@ -12,6 +13,10 @@ struct ServerConfig {
 };
 
 // Blocking; runs the server until SIGINT or stop().
-void run_server(sim::SimulationManager& mgr, const ServerConfig& cfg);
+// `land` may be null; when present, it is forwarded to the planner so the
+// route avoids land.
+void run_server(sim::SimulationManager& mgr,
+                const ServerConfig& cfg,
+                const geo::LandMask* land = nullptr);
 
 } // namespace bathy::net

@@ -3,7 +3,14 @@ import "uplot/dist/uPlot.min.css";
 
 import { initMap } from "./map";
 import { Telemetry } from "./telemetry";
-import { openStream, postControl, postMission, type Plan } from "./api";
+import {
+  fetchHistory,
+  openStream,
+  postControl,
+  postMission,
+  type Plan,
+  type Snapshot,
+} from "./api";
 
 interface UiState {
   start: { lng: number; lat: number } | null;
@@ -12,6 +19,19 @@ interface UiState {
 }
 
 const ui: UiState = { start: null, goal: null, plan: null };
+
+// ----------------------------- Playback state ------------------------------
+
+interface Playback {
+  history: Snapshot[];
+  scrubbing: boolean;       // true when the user is driving the slider
+  liveSnap: Snapshot | null; // latest snapshot from SSE
+  speed: number;             // current playback speed multiplier
+}
+
+const pb: Playback = { history: [], scrubbing: false, liveSnap: null, speed: 1 };
+
+// ----------------------------- Wiring --------------------------------------
 
 const mapEl = document.getElementById("map")!;
 const handle = initMap(mapEl, onMapClick);
@@ -22,7 +42,20 @@ const tel = new Telemetry(
   document.getElementById("conn-status")!,
 );
 
-let lastSnapTime = -1;
+const slider = document.getElementById("pb-slider") as HTMLInputElement;
+const timeLabel = document.getElementById("pb-time")!;
+const timeTotalLabel = document.getElementById("pb-time-total")!;
+const liveBtn = document.getElementById("pb-live") as HTMLButtonElement;
+const speedBtns = Array.from(
+  document.querySelectorAll<HTMLButtonElement>(".pb-speed"),
+);
+
+// Track-line drawing — replay incrementally as new history arrives so the
+// orange "actual track" line on the map always matches what the sub has
+// covered. When scrubbing we don't redraw the whole track; we just leave it.
+let trackDrawnUpTo = 0;
+let lastTrackPushT = -1; // throttle to ~1 Hz of sim-time
+
 let stream: EventSource | null = null;
 
 function connectStream() {
@@ -30,15 +63,21 @@ function connectStream() {
   tel.setConnected("warn", "connecting…");
   stream = openStream(
     (s) => {
-      tel.setConnected("ok", `streaming · sim t=${s.t.toFixed(1)}s`);
-      tel.update(s);
-      if (s.plan_loaded) {
-        handle.setSub(s.lon, s.lat, s.heading_deg);
-        // Throttle track points to ~1 Hz of sim time
-        if (s.t - lastSnapTime > 1.0) {
-          handle.appendTrack(s.lon, s.lat);
-          lastSnapTime = s.t;
-        }
+      pb.liveSnap = s;
+      tel.setConnected(
+        "ok",
+        pb.scrubbing
+          ? `streaming · live t=${s.t.toFixed(1)}s · (scrubbing)`
+          : `streaming · live t=${s.t.toFixed(1)}s`,
+      );
+      // Always update the chart, regardless of scrub state — charts show
+      // mission history accumulated over time, not the scrub position.
+      if (!pb.scrubbing) {
+        tel.update(s);
+        if (s.plan_loaded) handle.setSub(s.lon, s.lat, s.heading_deg);
+      } else {
+        // Still feed the chart with the live point so it keeps growing.
+        tel.updateChartOnly(s);
       }
     },
     () => {
@@ -49,6 +88,100 @@ function connectStream() {
 }
 connectStream();
 
+// ----------------------------- History polling -----------------------------
+
+async function pollHistory() {
+  try {
+    const chunk = await fetchHistory(pb.history.length);
+    if (chunk.items.length > 0) {
+      pb.history.push(...chunk.items);
+      // Update slider range. If we were on the live cursor, follow the new max.
+      const wasAtEnd = !pb.scrubbing;
+      slider.max = String(Math.max(0, pb.history.length - 1));
+      if (wasAtEnd) slider.value = slider.max;
+
+      // Extend the orange track polyline incrementally.
+      while (trackDrawnUpTo < pb.history.length) {
+        const s = pb.history[trackDrawnUpTo++];
+        if (s.plan_loaded && s.t - lastTrackPushT > 1.0) {
+          handle.appendTrack(s.lon, s.lat);
+          lastTrackPushT = s.t;
+        }
+      }
+      updateTimeLabels();
+    }
+  } catch {
+    // ignored
+  }
+}
+setInterval(pollHistory, 400);
+
+// ----------------------------- Slider + LIVE -------------------------------
+
+function updateTimeLabels() {
+  const total = pb.history.length > 0 ? pb.history[pb.history.length - 1].t : 0;
+  timeTotalLabel.textContent = `/ ${total.toFixed(1)} s`;
+  const idx = parseInt(slider.value, 10);
+  const t = pb.history[idx]?.t ?? 0;
+  timeLabel.textContent = `t = ${t.toFixed(1)} s`;
+}
+
+slider.addEventListener("input", () => {
+  if (pb.history.length === 0) return;
+  pb.scrubbing = true;
+  liveBtn.classList.remove("live-active");
+  liveBtn.classList.add("scrubbing");
+  liveBtn.textContent = "GO LIVE";
+  const idx = Math.min(parseInt(slider.value, 10), pb.history.length - 1);
+  const s = pb.history[idx];
+  if (s) {
+    tel.updateTextOnly(s);
+    if (s.plan_loaded) handle.setSub(s.lon, s.lat, s.heading_deg);
+  }
+  updateTimeLabels();
+});
+
+liveBtn.addEventListener("click", () => {
+  pb.scrubbing = false;
+  slider.value = String(Math.max(0, pb.history.length - 1));
+  liveBtn.classList.remove("scrubbing");
+  liveBtn.classList.add("live-active");
+  liveBtn.textContent = "LIVE";
+  if (pb.liveSnap) {
+    tel.update(pb.liveSnap);
+    if (pb.liveSnap.plan_loaded)
+      handle.setSub(pb.liveSnap.lon, pb.liveSnap.lat, pb.liveSnap.heading_deg);
+  }
+  updateTimeLabels();
+});
+// Start in live mode visually.
+liveBtn.classList.add("live-active");
+
+// ----------------------------- Speed buttons -------------------------------
+
+function setActiveSpeedBtn(speed: number) {
+  for (const b of speedBtns) {
+    const v = parseFloat(b.dataset.speed!);
+    b.classList.toggle("active", Math.abs(v - speed) < 1e-6);
+  }
+}
+
+for (const b of speedBtns) {
+  b.addEventListener("click", async () => {
+    const v = parseFloat(b.dataset.speed!);
+    pb.speed = v;
+    setActiveSpeedBtn(v);
+    try {
+      await postControl("set_speed", v);
+    } catch (e) {
+      console.error(e);
+    }
+  });
+}
+setActiveSpeedBtn(1);
+
+// ----------------------------- Map click + Plan ----------------------------
+
 function onMapClick(lng: number, lat: number) {
   if (!ui.start) {
     ui.start = { lng, lat };
@@ -57,7 +190,7 @@ function onMapClick(lng: number, lat: number) {
     ui.goal = { lng, lat };
     handle.setGoal([lng, lat]);
   } else {
-    // Third click resets
+    // Third click resets.
     ui.start = { lng, lat };
     ui.goal = null;
     handle.setStart([lng, lat]);
@@ -69,14 +202,34 @@ function onMapClick(lng: number, lat: number) {
   }
 }
 
+function resetClientHistory() {
+  pb.history = [];
+  pb.scrubbing = false;
+  pb.liveSnap = null;
+  trackDrawnUpTo = 0;
+  lastTrackPushT = -1;
+  slider.max = "0";
+  slider.value = "0";
+  liveBtn.classList.remove("scrubbing");
+  liveBtn.classList.add("live-active");
+  liveBtn.textContent = "LIVE";
+  updateTimeLabels();
+}
+
 document.getElementById("btn-plan")!.addEventListener("click", async () => {
   if (!ui.start || !ui.goal) {
     alert("Click the map to place a start and a goal.");
     return;
   }
-  const cruise_depth_m = parseFloat((document.getElementById("cruise-depth") as HTMLInputElement).value);
-  const cruise_speed_m_s = parseFloat((document.getElementById("cruise-speed") as HTMLInputElement).value);
-  const descent_rate_m_s = parseFloat((document.getElementById("descent-rate") as HTMLInputElement).value);
+  const cruise_depth_m = parseFloat(
+    (document.getElementById("cruise-depth") as HTMLInputElement).value,
+  );
+  const cruise_speed_m_s = parseFloat(
+    (document.getElementById("cruise-speed") as HTMLInputElement).value,
+  );
+  const descent_rate_m_s = parseFloat(
+    (document.getElementById("descent-rate") as HTMLInputElement).value,
+  );
 
   try {
     const plan = await postMission({
@@ -92,16 +245,27 @@ document.getElementById("btn-plan")!.addEventListener("click", async () => {
     handle.setRoute(plan);
     handle.clearTrack();
     tel.reset();
-    tel.setPlanSummary(plan.distance_m, plan.duration_s, plan.energy_J, plan.waypoints.length);
+    resetClientHistory();
+    tel.setPlanSummary(
+      plan.distance_m,
+      plan.duration_s,
+      plan.energy_J,
+      plan.waypoints.length,
+    );
   } catch (e) {
     alert(`Plan failed: ${e}`);
   }
 });
 
-document.getElementById("btn-play")!.addEventListener("click", () => postControl("play").catch(console.error));
-document.getElementById("btn-pause")!.addEventListener("click", () => postControl("pause").catch(console.error));
+document.getElementById("btn-play")!.addEventListener("click", () =>
+  postControl("play").catch(console.error),
+);
+document.getElementById("btn-pause")!.addEventListener("click", () =>
+  postControl("pause").catch(console.error),
+);
 document.getElementById("btn-reset")!.addEventListener("click", () => {
   handle.clearTrack();
   tel.reset();
+  resetClientHistory();
   postControl("reset").catch(console.error);
 });

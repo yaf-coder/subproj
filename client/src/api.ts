@@ -33,6 +33,8 @@ export interface Plan {
   duration_s: number;
   energy_J: number;
   waypoints: Waypoint[];
+  routed_around_land?: boolean;
+  error?: string;
 }
 
 export interface MissionRequest {
@@ -53,17 +55,44 @@ export async function postMission(req: MissionRequest): Promise<Plan> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   });
-  if (!r.ok) throw new Error(`mission: ${r.status}`);
-  return r.json();
+  // The server returns the plan JSON even on 4xx so we can surface a message.
+  let body: Plan | null = null;
+  try {
+    body = (await r.json()) as Plan;
+  } catch {
+    // fall through
+  }
+  if (!r.ok) {
+    const msg = (body && body.error) || `HTTP ${r.status}`;
+    throw new Error(msg);
+  }
+  if (!body) throw new Error("empty response");
+  return body;
 }
 
-export async function postControl(action: "play" | "pause" | "reset"): Promise<void> {
+export type ControlAction = "play" | "pause" | "reset" | "set_speed";
+
+export async function postControl(action: ControlAction, value?: number): Promise<void> {
+  const body: Record<string, unknown> = { action };
+  if (value !== undefined) body.value = value;
   const r = await fetch(`${base}/api/control`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action }),
+    body: JSON.stringify(body),
   });
   if (!r.ok) throw new Error(`control: ${r.status}`);
+}
+
+export interface HistoryChunk {
+  since: number;
+  total: number;
+  items: Snapshot[];
+}
+
+export async function fetchHistory(since: number): Promise<HistoryChunk> {
+  const r = await fetch(`${base}/api/history?since=${since}`);
+  if (!r.ok) throw new Error(`history: ${r.status}`);
+  return r.json();
 }
 
 export function openStream(onSnap: (s: Snapshot) => void, onErr: () => void): EventSource {

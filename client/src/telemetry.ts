@@ -54,6 +54,13 @@ export class Telemetry {
   }
 
   update(s: Snapshot) {
+    this.updateTextOnly(s);
+    this.updateChartOnly(s);
+  }
+
+  // Update the right-hand numeric rows without touching charts. Used when
+  // scrubbing through history.
+  updateTextOnly(s: Snapshot) {
     setText("tel-time", fmtTime(s.t));
     setText("tel-depth", `${s.depth_m.toFixed(2)} m`);
     setText("tel-speed", `${s.speed_m_s.toFixed(2)} m/s`);
@@ -66,7 +73,11 @@ export class Telemetry {
     setText("tel-curr", `${s.current_A.toFixed(2)} A`);
     setText("tel-pow", `${s.power_W.toFixed(1)} W`);
     setText("tel-en", `${(s.energy_J / 3600).toFixed(1)} Wh`);
+  }
 
+  // Push a sample onto the charts only. Used so the charts keep growing with
+  // live data while the user is scrubbing.
+  updateChartOnly(s: Snapshot) {
     push(this.depthChart, s.t, [s.depth_m]);
     push(this.powerChart, s.t, [s.power_W, s.soc * 100]);
   }

@@ -76,6 +76,29 @@ std::string snapshot_to_json(const sim::StateSnapshot& s) {
     return os.str();
 }
 
+std::string json_escape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 2);
+    for (char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    out += buf;
+                } else {
+                    out += c;
+                }
+        }
+    }
+    return out;
+}
+
 std::string plan_to_json(const planner::Plan& p) {
     std::ostringstream os;
     os.precision(9);
@@ -83,6 +106,10 @@ std::string plan_to_json(const planner::Plan& p) {
     os << "\"distance_m\":" << p.estimated_distance_m;
     os << ",\"duration_s\":" << p.estimated_duration_s;
     os << ",\"energy_J\":" << p.estimated_energy_J;
+    os << ",\"routed_around_land\":" << (p.routed_around_land ? "true" : "false");
+    if (!p.error.empty()) {
+        os << ",\"error\":\"" << json_escape(p.error) << "\"";
+    }
     os << ",\"waypoints\":[";
     for (size_t i = 0; i < p.waypoints.size(); ++i) {
         const auto& w = p.waypoints[i];
@@ -104,7 +131,9 @@ void add_cors(httplib::Response& res) {
 
 } // namespace
 
-void run_server(sim::SimulationManager& mgr, const ServerConfig& cfg) {
+void run_server(sim::SimulationManager& mgr,
+                const ServerConfig& cfg,
+                const geo::LandMask* land) {
     httplib::Server svr;
 
     // Global CORS preflight.
@@ -118,7 +147,7 @@ void run_server(sim::SimulationManager& mgr, const ServerConfig& cfg) {
         res.set_content("{\"ok\":true}", "application/json");
     });
 
-    svr.Post("/api/mission", [&mgr](const httplib::Request& req, httplib::Response& res) {
+    svr.Post("/api/mission", [&mgr, land](const httplib::Request& req, httplib::Response& res) {
         add_cors(res);
         const std::string& body = req.body;
         double s_lat, s_lon, g_lat, g_lon;
@@ -139,8 +168,12 @@ void run_server(sim::SimulationManager& mgr, const ServerConfig& cfg) {
         find_number(body, "descent_rate_m_s", mr.descent_rate_m_s);
         find_number(body, "sample_spacing_m", mr.sample_spacing_m);
 
-        planner::Plan plan = planner::plan_mission(mr);
-        mgr.load_plan(plan, mr.start);
+        planner::Plan plan = planner::plan_mission(mr, land);
+        if (plan.error.empty()) {
+            mgr.load_plan(plan, mr.start);
+        } else {
+            res.status = 422;
+        }
         res.set_content(plan_to_json(plan), "application/json");
     });
 
@@ -155,6 +188,15 @@ void run_server(sim::SimulationManager& mgr, const ServerConfig& cfg) {
         if (action == "play") mgr.play();
         else if (action == "pause") mgr.pause();
         else if (action == "reset") mgr.reset_to_start();
+        else if (action == "set_speed") {
+            double v = 1.0;
+            if (!find_number(req.body, "value", v)) {
+                res.status = 400;
+                res.set_content("{\"error\":\"set_speed needs numeric value\"}", "application/json");
+                return;
+            }
+            mgr.set_speed(v);
+        }
         else { res.status = 400; res.set_content("{\"error\":\"bad action\"}", "application/json"); return; }
         res.set_content("{\"ok\":true}", "application/json");
     });
@@ -162,6 +204,27 @@ void run_server(sim::SimulationManager& mgr, const ServerConfig& cfg) {
     svr.Get("/api/snapshot", [&mgr](const httplib::Request&, httplib::Response& res) {
         add_cors(res);
         res.set_content(snapshot_to_json(mgr.snapshot()), "application/json");
+    });
+
+    svr.Get("/api/history", [&mgr](const httplib::Request& req, httplib::Response& res) {
+        add_cors(res);
+        std::size_t since = 0;
+        if (req.has_param("since")) {
+            try { since = std::stoull(req.get_param_value("since")); }
+            catch (...) { since = 0; }
+        }
+        const auto items = mgr.history(since);
+        const std::size_t total = mgr.history_size();
+        std::ostringstream os;
+        os << "{\"since\":" << since
+           << ",\"total\":" << total
+           << ",\"items\":[";
+        for (std::size_t i = 0; i < items.size(); ++i) {
+            if (i) os << ",";
+            os << snapshot_to_json(items[i]);
+        }
+        os << "]}";
+        res.set_content(os.str(), "application/json");
     });
 
     svr.Get("/api/plan", [&mgr](const httplib::Request&, httplib::Response& res) {

@@ -32,6 +32,7 @@ add_executable(bathyscaphe
     src/physics/powertrain.cpp
     src/planner/planner.cpp
     src/geo/coords.cpp
+    src/geo/land_mask.cpp
     src/sim/sim_manager.cpp
     src/net/server.cpp
 )
