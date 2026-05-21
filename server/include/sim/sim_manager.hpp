@@ -2,6 +2,8 @@
 
 #include "geo/coords.hpp"
 #include "geo/land_mask.hpp"
+#include "physics/bathymetry.hpp"
+#include "physics/currents.hpp"
 #include "physics/dynamics.hpp"
 #include "physics/environment.hpp"
 #include "physics/state.hpp"
@@ -48,7 +50,10 @@ public:
     ~SimulationManager();
 
     void set_vehicle(physics::VehicleParams v);
+    physics::VehicleParams vehicle() const;
     void set_land_mask(const geo::LandMask* land); // not owning; may be null
+    void set_bathymetry(const physics::Bathymetry* b);
+    void set_currents(const physics::CurrentField* c);
     void load_plan(planner::Plan plan, geo::LatLon origin);
     void play();
     void pause();
@@ -104,6 +109,8 @@ private:
     double yaw_d_filt_ = 0.0;
 
     const geo::LandMask* land_ = nullptr;
+    const physics::Bathymetry* bath_ = nullptr;
+    const physics::CurrentField* currents_ = nullptr;
 
     // Playback control.
     double speed_ = 1.0;

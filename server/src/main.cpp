@@ -1,9 +1,12 @@
 #include "geo/land_mask.hpp"
 #include "net/server.hpp"
+#include "physics/bathymetry.hpp"
+#include "physics/currents.hpp"
 #include "sim/sim_manager.hpp"
 
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <string>
 
 int main(int argc, char** argv) {
@@ -52,11 +55,24 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Build procedural bathymetry from the land mask if we have one. The grid
+    // build is a few hundred ms and amortizes over every depth_at() call.
+    std::unique_ptr<bathy::physics::ProceduralBathymetry> bath;
+    if (land.loaded()) {
+        bath = std::make_unique<bathy::physics::ProceduralBathymetry>(land);
+    }
+    bathy::physics::SyntheticCurrentField currents;
+
     bathy::sim::SimulationManager mgr;
     mgr.set_land_mask(land.loaded() ? &land : nullptr);
+    mgr.set_bathymetry(bath.get());
+    mgr.set_currents(&currents);
     mgr.start_loop();
 
-    bathy::net::run_server(mgr, cfg, land.loaded() ? &land : nullptr);
+    bathy::net::run_server(mgr, cfg,
+                           land.loaded() ? &land : nullptr,
+                           bath.get(),
+                           &currents);
 
     mgr.stop_loop();
     return 0;

@@ -30,9 +30,24 @@ void SimulationManager::set_vehicle(physics::VehicleParams v) {
     vehicle_ = std::move(v);
 }
 
+physics::VehicleParams SimulationManager::vehicle() const {
+    std::lock_guard<std::mutex> lk(mu_);
+    return vehicle_;
+}
+
 void SimulationManager::set_land_mask(const geo::LandMask* land) {
     std::lock_guard<std::mutex> lk(mu_);
     land_ = land;
+}
+
+void SimulationManager::set_bathymetry(const physics::Bathymetry* b) {
+    std::lock_guard<std::mutex> lk(mu_);
+    bath_ = b;
+}
+
+void SimulationManager::set_currents(const physics::CurrentField* c) {
+    std::lock_guard<std::mutex> lk(mu_);
+    currents_ = c;
 }
 
 void SimulationManager::set_speed(double s) {
@@ -170,6 +185,19 @@ void SimulationManager::step_locked(double dt) {
         running_ = false;
         return;
     }
+
+    // Refresh local environment from bathymetry + currents at the sub's
+    // current position. We hold these constant across the RK4 substeps —
+    // both fields vary slowly enough in space that the small position
+    // change inside one 5 ms step doesn't matter.
+    if (frame_) {
+        const Eigen::Vector2d enu(state_.p_w.x(), state_.p_w.y());
+        const geo::LatLon ll = frame_->to_latlon(enu);
+        const double cur_depth_m = std::max(0.0, -state_.p_w.z());
+        if (bath_) env_.sea_floor_depth_m = bath_->depth_at(ll);
+        if (currents_) env_.current_w = currents_->velocity_at(ll, cur_depth_m);
+    }
+
     auto cmd = compute_commands_locked();
     state_ = physics::rk4_step(state_, dt, vehicle_, cmd, env_, tel_);
 

@@ -4,10 +4,14 @@ import "uplot/dist/uPlot.min.css";
 import { initMap } from "./map";
 import { Telemetry } from "./telemetry";
 import {
+  fetchBathymetry,
+  fetchCurrents,
   fetchHistory,
   openStream,
   postControl,
   postMission,
+  postVehicle,
+  type BboxGrid,
   type Plan,
   type Snapshot,
 } from "./api";
@@ -269,3 +273,110 @@ document.getElementById("btn-reset")!.addEventListener("click", () => {
   resetClientHistory();
   postControl("reset").catch(console.error);
 });
+
+// ---------------------------- Vehicle config ------------------------------
+
+const vehLengthEl = document.getElementById("veh-length") as HTMLInputElement;
+const vehRadiusEl = document.getElementById("veh-radius") as HTMLInputElement;
+const vehMassEl = document.getElementById("veh-mass") as HTMLInputElement;
+const vehVolumeEl = document.getElementById("veh-volume")!;
+const vehBuoyEl = document.getElementById("veh-buoy")!;
+
+function updateVehicleReadout(length_m: number, radius_m: number, mass_kg: number, volume_m3: number) {
+  vehVolumeEl.textContent = `${(volume_m3 * 1000).toFixed(2)} L`;
+  // Buoyancy ratio: displaced mass / dry mass. > 1 = positive.
+  const buoy_pct = (volume_m3 * 1025 / Math.max(0.1, mass_kg) - 1) * 100;
+  vehBuoyEl.textContent = `${buoy_pct >= 0 ? "+" : ""}${buoy_pct.toFixed(1)}%`;
+  void length_m;
+  void radius_m;
+}
+
+document.getElementById("btn-vehicle")!.addEventListener("click", async () => {
+  const length_m = parseFloat(vehLengthEl.value);
+  const radius_m = parseFloat(vehRadiusEl.value);
+  const mass_kg = parseFloat(vehMassEl.value);
+  try {
+    const v = await postVehicle(length_m, radius_m, mass_kg);
+    updateVehicleReadout(length_m, radius_m, mass_kg, v.volume_m3);
+  } catch (e) {
+    alert(`Vehicle update failed: ${e}`);
+  }
+});
+
+// Initial readout based on default input values.
+updateVehicleReadout(
+  parseFloat(vehLengthEl.value),
+  parseFloat(vehRadiusEl.value),
+  parseFloat(vehMassEl.value),
+  Math.PI * 0.10 * 0.10 * 1.0 * 1.002, // matches torpedo() formula
+);
+
+// ---------------------------- Environment overlays ------------------------
+
+const ovBathEl = document.getElementById("ov-bath") as HTMLInputElement;
+const ovCurrEl = document.getElementById("ov-curr") as HTMLInputElement;
+
+ovBathEl.addEventListener("change", () => handle.setBathymetryVisible(ovBathEl.checked));
+ovCurrEl.addEventListener("change", () => handle.setCurrentsVisible(ovCurrEl.checked));
+
+function viewportBboxGrid(): BboxGrid {
+  const b = handle.map.getBounds();
+  return {
+    lat_min: b.getSouth(),
+    lon_min: b.getWest(),
+    lat_max: b.getNorth(),
+    lon_max: b.getEast(),
+    width: 80,
+    height: 56,
+  };
+}
+
+let refreshTimer: number | null = null;
+let lastBboxKey = "";
+
+function scheduleOverlayRefresh(immediate = false) {
+  if (refreshTimer !== null) {
+    window.clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
+  const run = async () => {
+    refreshTimer = null;
+    const bath_bbox = viewportBboxGrid();
+    const curr_bbox: BboxGrid = { ...bath_bbox, width: 14, height: 10 };
+    const key = [
+      bath_bbox.lat_min.toFixed(3),
+      bath_bbox.lon_min.toFixed(3),
+      bath_bbox.lat_max.toFixed(3),
+      bath_bbox.lon_max.toFixed(3),
+    ].join("/");
+    if (key === lastBboxKey) return;
+    lastBboxKey = key;
+    // Pick a representative depth for the current field overlay — the cruise
+    // depth the user set, so they're seeing what their sub will fly through.
+    const depth = parseFloat(
+      (document.getElementById("cruise-depth") as HTMLInputElement).value,
+    );
+    try {
+      const [bath, curr] = await Promise.all([
+        fetchBathymetry(bath_bbox),
+        fetchCurrents(curr_bbox, isFinite(depth) ? depth : 0),
+      ]);
+      handle.setBathymetry(bath);
+      handle.setCurrents(curr);
+    } catch (e) {
+      console.error("overlay fetch failed", e);
+    }
+  };
+  if (immediate) {
+    void run();
+  } else {
+    refreshTimer = window.setTimeout(run, 400);
+  }
+}
+
+if (handle.map.loaded()) {
+  scheduleOverlayRefresh(true);
+} else {
+  handle.map.on("load", () => scheduleOverlayRefresh(true));
+}
+handle.map.on("moveend", () => scheduleOverlayRefresh());

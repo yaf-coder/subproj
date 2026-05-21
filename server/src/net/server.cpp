@@ -133,7 +133,9 @@ void add_cors(httplib::Response& res) {
 
 void run_server(sim::SimulationManager& mgr,
                 const ServerConfig& cfg,
-                const geo::LandMask* land) {
+                const geo::LandMask* land,
+                const physics::Bathymetry* bath,
+                const physics::CurrentField* currents) {
     httplib::Server svr;
 
     // Global CORS preflight.
@@ -204,6 +206,171 @@ void run_server(sim::SimulationManager& mgr,
     svr.Get("/api/snapshot", [&mgr](const httplib::Request&, httplib::Response& res) {
         add_cors(res);
         res.set_content(snapshot_to_json(mgr.snapshot()), "application/json");
+    });
+
+    // -------------------------------------------------------------------
+    // Environment sampling: bathymetry & currents over a lat/lon bbox.
+    // -------------------------------------------------------------------
+    auto parse_bbox = [](const httplib::Request& req,
+                         double& lat_min, double& lon_min,
+                         double& lat_max, double& lon_max,
+                         int& nx, int& ny) -> bool {
+        try {
+            lat_min = std::stod(req.get_param_value("lat_min"));
+            lon_min = std::stod(req.get_param_value("lon_min"));
+            lat_max = std::stod(req.get_param_value("lat_max"));
+            lon_max = std::stod(req.get_param_value("lon_max"));
+        } catch (...) {
+            return false;
+        }
+        nx = req.has_param("width") ? std::atoi(req.get_param_value("width").c_str()) : 48;
+        ny = req.has_param("height") ? std::atoi(req.get_param_value("height").c_str()) : 32;
+        nx = std::clamp(nx, 4, 192);
+        ny = std::clamp(ny, 4, 192);
+        return true;
+    };
+
+    svr.Get("/api/bathymetry", [&mgr, bath, land, parse_bbox]
+            (const httplib::Request& req, httplib::Response& res) {
+        (void)mgr;
+        add_cors(res);
+        double lat_min, lon_min, lat_max, lon_max;
+        int nx, ny;
+        if (!parse_bbox(req, lat_min, lon_min, lat_max, lon_max, nx, ny)) {
+            res.status = 400;
+            res.set_content("{\"error\":\"missing lat_min/lon_min/lat_max/lon_max\"}",
+                            "application/json");
+            return;
+        }
+        std::ostringstream os;
+        os.precision(7);
+        os << "{\"lat_min\":" << lat_min
+           << ",\"lon_min\":" << lon_min
+           << ",\"lat_max\":" << lat_max
+           << ",\"lon_max\":" << lon_max
+           << ",\"width\":" << nx
+           << ",\"height\":" << ny
+           << ",\"max_depth_m\":0";
+        double max_depth = 0.0;
+        std::vector<double> depths(static_cast<std::size_t>(nx) * ny, 0.0);
+        for (int j = 0; j < ny; ++j) {
+            const double lat = lat_min + (lat_max - lat_min) * (j + 0.5) / ny;
+            for (int i = 0; i < nx; ++i) {
+                const double lon = lon_min + (lon_max - lon_min) * (i + 0.5) / nx;
+                double d = 0.0;
+                const bool on_land = land && land->loaded() && land->is_land(lat, lon);
+                if (!on_land && bath) d = bath->depth_at({lat, lon});
+                depths[static_cast<std::size_t>(j) * nx + i] = d;
+                if (d > max_depth) max_depth = d;
+            }
+        }
+        os << ",\"depths\":[";
+        for (std::size_t k = 0; k < depths.size(); ++k) {
+            if (k) os << ",";
+            // 1 m resolution is plenty for visualization; emit as integer to
+            // keep JSON small.
+            os << static_cast<long long>(std::lround(depths[k]));
+        }
+        os << "]}";
+        std::string body = os.str();
+        // Backfill max_depth (cheap string fixup so we don't double-scan).
+        const std::string key = "\"max_depth_m\":0";
+        const auto pos = body.find(key);
+        if (pos != std::string::npos) {
+            std::ostringstream rep;
+            rep << "\"max_depth_m\":" << static_cast<long long>(std::lround(max_depth));
+            body.replace(pos, key.size(), rep.str());
+        }
+        res.set_content(body, "application/json");
+    });
+
+    svr.Get("/api/currents", [&mgr, currents, land, parse_bbox]
+            (const httplib::Request& req, httplib::Response& res) {
+        (void)mgr;
+        add_cors(res);
+        double lat_min, lon_min, lat_max, lon_max;
+        int nx, ny;
+        if (!parse_bbox(req, lat_min, lon_min, lat_max, lon_max, nx, ny)) {
+            res.status = 400;
+            res.set_content("{\"error\":\"missing lat_min/lon_min/lat_max/lon_max\"}",
+                            "application/json");
+            return;
+        }
+        double depth_m = 0.0;
+        if (req.has_param("depth_m")) {
+            try { depth_m = std::stod(req.get_param_value("depth_m")); } catch (...) {}
+        }
+        std::ostringstream os;
+        os.precision(6);
+        os << "{\"lat_min\":" << lat_min
+           << ",\"lon_min\":" << lon_min
+           << ",\"lat_max\":" << lat_max
+           << ",\"lon_max\":" << lon_max
+           << ",\"width\":" << nx
+           << ",\"height\":" << ny
+           << ",\"depth_m\":" << depth_m
+           << ",\"u\":[";
+        // u = east-positive, v = north-positive, both m/s.
+        std::vector<double> us, vs;
+        us.reserve(static_cast<std::size_t>(nx) * ny);
+        vs.reserve(static_cast<std::size_t>(nx) * ny);
+        for (int j = 0; j < ny; ++j) {
+            const double lat = lat_min + (lat_max - lat_min) * (j + 0.5) / ny;
+            for (int i = 0; i < nx; ++i) {
+                const double lon = lon_min + (lon_max - lon_min) * (i + 0.5) / nx;
+                Eigen::Vector3d c = Eigen::Vector3d::Zero();
+                const bool on_land = land && land->loaded() && land->is_land(lat, lon);
+                if (!on_land && currents) c = currents->velocity_at({lat, lon}, depth_m);
+                us.push_back(c.x());
+                vs.push_back(c.y());
+            }
+        }
+        for (std::size_t k = 0; k < us.size(); ++k) {
+            if (k) os << ",";
+            os << us[k];
+        }
+        os << "],\"v\":[";
+        for (std::size_t k = 0; k < vs.size(); ++k) {
+            if (k) os << ",";
+            os << vs[k];
+        }
+        os << "]}";
+        res.set_content(os.str(), "application/json");
+    });
+
+    // -------------------------------------------------------------------
+    // Vehicle configuration: torpedo with (length, radius, mass).
+    // -------------------------------------------------------------------
+    svr.Get("/api/vehicle", [&mgr](const httplib::Request&, httplib::Response& res) {
+        add_cors(res);
+        const auto v = mgr.vehicle();
+        std::ostringstream os;
+        os.precision(6);
+        os << "{\"name\":\"" << v.name << "\""
+           << ",\"mass_kg\":" << v.hull.mass_kg
+           << ",\"volume_m3\":" << v.hull.volume_m3
+           << ",\"thruster_count\":" << v.thrusters.size()
+           << "}";
+        res.set_content(os.str(), "application/json");
+    });
+
+    svr.Post("/api/vehicle", [&mgr](const httplib::Request& req, httplib::Response& res) {
+        add_cors(res);
+        double length_m = 1.0, radius_m = 0.10, mass_kg = 25.0;
+        find_number(req.body, "length_m", length_m);
+        find_number(req.body, "radius_m", radius_m);
+        find_number(req.body, "mass_kg", mass_kg);
+        auto v = physics::VehicleParams::torpedo(length_m, radius_m, mass_kg);
+        mgr.set_vehicle(v);
+        std::ostringstream os;
+        os.precision(6);
+        os << "{\"name\":\"" << v.name << "\""
+           << ",\"mass_kg\":" << v.hull.mass_kg
+           << ",\"volume_m3\":" << v.hull.volume_m3
+           << ",\"length_m\":" << length_m
+           << ",\"radius_m\":" << radius_m
+           << "}";
+        res.set_content(os.str(), "application/json");
     });
 
     svr.Get("/api/history", [&mgr](const httplib::Request& req, httplib::Response& res) {

@@ -27,6 +27,8 @@ find_package(Threads REQUIRED)
 
 add_executable(bathyscaphe
     src/main.cpp
+    src/physics/bathymetry.cpp
+    src/physics/currents.cpp
     src/physics/dynamics.cpp
     src/physics/integrator.cpp
     src/physics/powertrain.cpp
