@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>bathyscaphe</title>
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+    <link rel="stylesheet" href="https://unpkg.com/uplot@1.6.31/dist/uPlot.min.css" />
+    <style>
+      :root {
+        --bg: #0b1117;
+        --panel: #141c25;
+        --panel-2: #1a2430;
+        --border: #2a3a4a;
+        --text: #e8f0f8;
+        --muted: #8da3b8;
+        --accent: #4cc4ff;
+        --accent-warn: #ffa000;
+        --accent-bad: #ff5555;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; padding: 0; height: 100%;
+        background: var(--bg); color: var(--text);
+        font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      #app {
+        display: grid;
+        grid-template-columns: 320px 1fr 360px;
+        height: 100vh;
+      }
+      .panel {
+        background: var(--panel);
+        border-right: 1px solid var(--border);
+        overflow-y: auto;
+      }
+      .panel.right { border-right: none; border-left: 1px solid var(--border); }
+      .panel h2 {
+        margin: 0; padding: 14px 16px;
+        font-size: 12px; text-transform: uppercase; letter-spacing: 1px;
+        color: var(--muted);
+        border-bottom: 1px solid var(--border);
+      }
+      .section { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+      .row { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; }
+      .row .lbl { color: var(--muted); }
+      .row .val { font-variant-numeric: tabular-nums; }
+      label { display: block; padding: 6px 0 4px; color: var(--muted); font-size: 11px; }
+      input, select, button {
+        width: 100%;
+        background: var(--panel-2);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 6px 8px;
+        font: inherit;
+      }
+      button {
+        cursor: pointer;
+        background: var(--accent);
+        color: #001827;
+        border: none;
+        font-weight: 600;
+      }
+      button.secondary {
+        background: var(--panel-2); color: var(--text);
+        border: 1px solid var(--border);
+      }
+      button:disabled { opacity: 0.5; cursor: default; }
+      .btn-row { display: flex; gap: 8px; }
+      .btn-row > * { flex: 1; }
+      #map { width: 100%; height: 100%; }
+      .status { padding: 8px 16px; font-size: 11px; color: var(--muted); }
+      .status.ok { color: var(--accent); }
+      .status.warn { color: var(--accent-warn); }
+      .status.bad { color: var(--accent-bad); }
+      .chart { padding: 8px 12px; }
+      .chart-title { font-size: 11px; color: var(--muted); padding: 4px 4px 0; }
+      .legend { display: flex; gap: 12px; font-size: 11px; color: var(--muted); padding: 0 16px 8px; }
+      .legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+      .help { font-size: 11px; color: var(--muted); padding: 8px 16px; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <aside class="panel left">
+        <h2>Vehicle &amp; Mission</h2>
+        <div class="section">
+          <div class="help">
+            Click the map to set <b style="color:#4cc4ff">start</b>, click again for <b style="color:#ffa000">goal</b>.
+            Third click resets.
+          </div>
+        </div>
+        <div class="section">
+          <label>Cruise depth (m)</label>
+          <input id="cruise-depth" type="number" value="40" min="2" max="500" step="1" />
+          <label>Cruise speed (m/s)</label>
+          <input id="cruise-speed" type="number" value="1.2" min="0.2" max="3.0" step="0.1" />
+          <label>Descent rate (m/s)</label>
+          <input id="descent-rate" type="number" value="0.4" min="0.1" max="1.5" step="0.1" />
+        </div>
+        <div class="section">
+          <div class="btn-row">
+            <button id="btn-plan">Plan</button>
+            <button id="btn-play" class="secondary">Play</button>
+          </div>
+          <div class="btn-row" style="margin-top:8px;">
+            <button id="btn-pause" class="secondary">Pause</button>
+            <button id="btn-reset" class="secondary">Reset</button>
+          </div>
+        </div>
+        <div class="section">
+          <h2 style="border:none;padding:0 0 8px 0;">Plan estimate</h2>
+          <div class="row"><span class="lbl">Distance</span><span class="val" id="plan-dist">—</span></div>
+          <div class="row"><span class="lbl">Duration</span><span class="val" id="plan-dur">—</span></div>
+          <div class="row"><span class="lbl">Energy</span><span class="val" id="plan-en">—</span></div>
+          <div class="row"><span class="lbl">Waypoints</span><span class="val" id="plan-wp">—</span></div>
+        </div>
+        <div id="conn-status" class="status">disconnected</div>
+      </aside>
+
+      <main><div id="map"></div></main>
+
+      <aside class="panel right">
+        <h2>Live telemetry</h2>
+        <div class="section">
+          <div class="row"><span class="lbl">Mission time</span><span class="val" id="tel-time">—</span></div>
+          <div class="row"><span class="lbl">Depth</span><span class="val" id="tel-depth">—</span></div>
+          <div class="row"><span class="lbl">Speed</span><span class="val" id="tel-speed">—</span></div>
+          <div class="row"><span class="lbl">Heading</span><span class="val" id="tel-hdg">—</span></div>
+          <div class="row"><span class="lbl">Pitch / Roll</span><span class="val" id="tel-pr">—</span></div>
+          <div class="row"><span class="lbl">Waypoint</span><span class="val" id="tel-wp">—</span></div>
+          <div class="row"><span class="lbl">Status</span><span class="val" id="tel-state">—</span></div>
+        </div>
+        <div class="section">
+          <div class="row"><span class="lbl">Battery SoC</span><span class="val" id="tel-soc">—</span></div>
+          <div class="row"><span class="lbl">Voltage</span><span class="val" id="tel-volt">—</span></div>
+          <div class="row"><span class="lbl">Current</span><span class="val" id="tel-curr">—</span></div>
+          <div class="row"><span class="lbl">Power</span><span class="val" id="tel-pow">—</span></div>
+          <div class="row"><span class="lbl">Energy used</span><span class="val" id="tel-en">—</span></div>
+        </div>
+        <div class="chart-title">Depth (m)</div>
+        <div class="chart" id="chart-depth"></div>
+        <div class="chart-title">Power (W) &amp; SoC (%)</div>
+        <div class="chart" id="chart-power"></div>
+      </aside>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
