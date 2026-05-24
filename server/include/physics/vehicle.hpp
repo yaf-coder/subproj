@@ -116,11 +116,18 @@ struct VehicleParams {
         const double m = std::max(2.0, std::min(mass_kg, 800.0));
 
         constexpr double kPiV = 3.14159265358979323846;
-        const double vol_hull    = kPiV * R * R * L;
-        const double vol_neutral = m / 1025.0;
-        // Pick whichever volume is larger so we never sit below neutral,
-        // then add 0.2 % positive buoyancy on top.
-        const double vol = std::max(vol_hull, vol_neutral) * 1.002;
+        // Displacement is set to the dry mass divided by seawater density plus
+        // a 0.2% positive trim, so the vehicle is always slightly positively
+        // buoyant regardless of the (L, R, m) the user picked. Hull geometry
+        // does *not* dictate displacement here — using max(hull_vol, neutral)
+        // would force vol > neutral whenever the cylindrical envelope was
+        // larger than the dry mass implies, producing very (>20 %) positively
+        // buoyant vehicles that can't descend with the available thrust.
+        const double vol = (m / 1025.0) * 1.002;
+        // The hull cylindrical volume is still computed for drag/added-mass
+        // scaling below.
+        const double vol_hull = kPiV * R * R * L;
+        (void)vol_hull;
 
         v.hull.mass_kg    = m;
         v.hull.volume_m3  = vol;

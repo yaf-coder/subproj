@@ -2,10 +2,13 @@
 
 A full-stack autonomous underwater vehicle (AUV) mission simulator with a deterministic
 six-degree-of-freedom physics engine, an energy-aware land-avoiding mission planner,
-procedural bathymetry and ocean-current fields, a real-time PID flight controller,
-and a browser front-end that renders a globally-georeferenced map with bathymetry
-and current-vector overlays, live telemetry streaming, mission history, and
-variable-speed playback with timeline scrubbing.
+**real-world bathymetry** (GMT earth_relief, bundled global 15-arcmin) and
+**real-world ocean currents** (HYCOM GLBy0.08, bundled 1° × 7 depth levels), a real-time
+PID flight controller, and a browser front-end that renders a globally-georeferenced
+map with bathymetry and current-vector overlays, live telemetry streaming, mission
+history, and variable-speed playback with timeline scrubbing. Procedural and
+synthetic environment models are still in the build as fallbacks for missing files
+and out-of-coverage regions.
 
 This document is intentionally verbose. It describes both *what* the system does and
 *how* it does it, with reference to the relevant files, sub-systems, and the
@@ -106,7 +109,9 @@ physics ticks plus housekeeping) and the HTTP handlers' work is brief.
 │   ├── CMakeLists.txt                       — CMake configuration; FetchContent → Eigen 3.4.0
 │   ├── data/
 │   │   ├── ne_10m_land.geojson              — Natural Earth 1:10m land polygons (≈10 MB)
-│   │   └── ne_50m_land.geojson              — fallback 1:50m polygons (≈1.6 MB)
+│   │   ├── ne_50m_land.geojson              — fallback 1:50m polygons (≈1.6 MB)
+│   │   ├── earth_relief_15m.bath            — GMT global bathymetry (15-arcmin, ≈4 MB)
+│   │   └── hycom_1deg_7depths.curr          — HYCOM ocean currents (1°, 7 depths, ≈7 MB)
 │   ├── include/                             — public headers
 │   │   ├── geo/
 │   │   │   ├── coords.hpp                   — LatLon, LocalFrame (ENU), great_circle_m
@@ -120,6 +125,9 @@ physics ticks plus housekeeping) and the HTTP handlers' work is brief.
 │   │   │   ├── environment.hpp              — Environment (rho, g, seafloor, currents)
 │   │   │   ├── integrator.hpp               — rk4_step()
 │   │   │   ├── powertrain.hpp               — motor_step(), battery_step(), readings
+│   │   │   ├── raster_bathymetry.hpp        — RasterBathymetry (.bath loader)
+│   │   │   ├── raster_current_field.hpp     — RasterCurrentField (.curr loader)
+│   │   │   ├── raster_grid.hpp              — binary file-format constants & headers
 │   │   │   ├── state.hpp                    — State, Derivative
 │   │   │   └── vehicle.hpp                  — VehicleParams, HullParams, MotorParams,
 │   │   │                                       BatteryParams, Thruster,
@@ -133,12 +141,17 @@ physics ticks plus housekeeping) and the HTTP handlers' work is brief.
 │   │   ├── net/server.cpp                   — all HTTP/SSE handlers + JSON marshalling
 │   │   ├── physics/{bathymetry,currents,
 │   │   │             dynamics,integrator,
-│   │   │             powertrain}.cpp
+│   │   │             powertrain,
+│   │   │             raster_bathymetry,
+│   │   │             raster_current_field}.cpp
 │   │   ├── planner/planner.cpp              — great-circle + A* over local ENU grid
 │   │   ├── sim/sim_manager.cpp              — control loop, PID, history, speed pacing
 │   │   └── main.cpp                         — entry point, CLI parsing, wiring
 │   └── third_party/
 │       └── httplib.h                        — vendored cpp-httplib single header
+├── tools/
+│   └── fetch_env_data.py                    — downloads GMT bathymetry + HYCOM currents
+│                                              and packs to the bundled binary format
 └── client/                                  — TypeScript / Vite frontend
     ├── index.html                           — single-page layout, CSS, control widgets
     ├── package.json, tsconfig.json, vite.config.ts
@@ -168,10 +181,14 @@ cd server
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ./build/bathyscaphe                       # default: bind 0.0.0.0:8080
-./build/bathyscaphe --port 8089           # custom TCP port
-./build/bathyscaphe --host 127.0.0.1      # custom bind address
+./build/bathyscaphe --port 8089             # custom TCP port
+./build/bathyscaphe --host 127.0.0.1        # custom bind address
 ./build/bathyscaphe --land path/to.geojson  # custom land polygons
-./build/bathyscaphe --no-land             # disable LandMask (sub can cross land)
+./build/bathyscaphe --no-land               # disable LandMask
+./build/bathyscaphe --bathymetry x.bath     # custom .bath file
+./build/bathyscaphe --no-bathymetry         # procedural bathymetry only
+./build/bathyscaphe --currents x.curr       # custom .curr file
+./build/bathyscaphe --no-currents           # synthetic currents only
 ```
 
 On first start the server:
@@ -182,17 +199,38 @@ On first start the server:
    half-degree resolution) via a chamfer distance transform seeded by the
    land mask. This one-time cost is roughly 7–9 s on a modern laptop; the
    bottleneck is the 259 200 point-in-polygon classifications, not the
-   distance transform itself.
-3. Constructs the `SyntheticCurrentField` (closed-form, no precomputation).
-4. Starts the physics thread at 200 Hz with a paused, no-plan state.
-5. Begins listening for HTTP/SSE.
+   distance transform itself. This becomes the fallback for the raster
+   bathymetry.
+3. Loads the bundled raster bathymetry (`data/earth_relief_15m.bath`,
+   global 15-arc-minute GMT earth_relief) and validates the header.
+4. Loads the bundled raster currents (`data/hycom_1deg_7depths.curr`, a
+   1° resampled snapshot of HYCOM `GLBy0.08/expt_93.0` at 7 depth levels)
+   and validates the header.
+5. Constructs the `SyntheticCurrentField` as a closed-form fallback.
+6. Starts the physics thread at 200 Hz with a paused, no-plan state.
+7. Begins listening for HTTP/SSE.
 
-When the bathymetry grid is built you'll see something like:
+A typical startup log:
 
 ```
 LandMask: loaded 6837 polygons from data/ne_10m_land.geojson
-ProceduralBathymetry: built 720x360 distance-to-coast grid in 7920 ms
+ProceduralBathymetry: built 720x360 distance-to-coast grid in 7489 ms
+RasterBathymetry: loaded 1440x720 cells from data/earth_relief_15m.bath
+  (bbox lat [-89.875,89.875] lon [-179.875,179.875]; land=353505 ocean=683295
+   nodata=0; elev range [-18484, 11971] m)
+RasterCurrentField: loaded 375x355x7 from data/hycom_1deg_7depths.curr
+  (bbox lat [-80,89.92] lon [0,359.04]; depth [0,500] m; surface valid=92354
+   masked=40771; |c|_max=2.537 |c|_mean=0.247 m/s)
 bathyscaphe server listening on 0.0.0.0:8080
+```
+
+If either binary data file is missing, the server logs a notice and degrades
+gracefully to the procedural / synthetic fallback. The data files can be
+re-generated at any time with:
+
+```sh
+python3 -m venv .venv && source .venv/bin/activate && pip install h5py numpy
+python3 tools/fetch_env_data.py bundle
 ```
 
 ### Client
@@ -411,11 +449,10 @@ The mask is used in three places:
    the planner is doing its job).
 3. The **bathymetry constructor**, to seed the distance-to-coast grid.
 
-### 6.2 Procedural bathymetry
+### 6.2 Bathymetry
 
-Real bundled bathymetry would require shipping a multi-GB GEBCO/ETOPO subset, so
-the current implementation is **procedural** but visually and physically
-reasonable. The architecture is virtual:
+The system ships with **two** bathymetry implementations that share a common
+virtual interface:
 
 ```cpp
 class Bathymetry {
@@ -423,10 +460,58 @@ public:
     virtual double depth_at(geo::LatLon ll) const = 0;
 };
 class ProceduralBathymetry : public Bathymetry { ... };
+class RasterBathymetry   : public Bathymetry { ... };
 ```
 
-so a `RasterBathymetry` loader can drop in later without touching the rest of the
-stack. `ProceduralBathymetry`:
+At startup the server prefers `RasterBathymetry` (loaded from a packed binary
+`.bath` file) and falls back to `ProceduralBathymetry` if no raster file is
+found *or* if a particular query lands outside the raster's coverage. The
+fallback wiring is set up in `main.cpp`:
+
+```cpp
+auto proc_bath   = std::make_unique<ProceduralBathymetry>(land);
+auto raster_bath = std::make_unique<RasterBathymetry>(proc_bath.get());
+raster_bath->load_file("data/earth_relief_15m.bath");
+const Bathymetry* effective_bath = raster_bath.get();
+```
+
+#### 6.2.1 RasterBathymetry (real GMT earth_relief)
+
+`RasterBathymetry` consumes a flat binary format defined in
+`physics/raster_grid.hpp` (`BathyHeader` — 64-byte header + `width*height`
+little-endian `float32` cells of elevation in meters, negative below sea level,
+row-major with `j=0` at `lat_min`). The default bundled dataset
+(`server/data/earth_relief_15m.bath`, ~4 MB) is:
+
+- **Source:** GMT's `earth_relief_15m_p.grd`, a public-domain global
+  topography/bathymetry product distributed by the Generic Mapping Tools
+  project.
+- **Resolution:** 15-arc-minute (≈ 28 km at the equator), pixel-centered.
+- **Coverage:** Global, -89.875° to 89.875° latitude, -179.875° to 179.875°
+  longitude.
+- **Range:** −18 484 m (Mariana Trench-ish) to +11 971 m (Himalayan ice).
+
+At query time, `depth_at(LatLon)`:
+1. Wraps longitude into the dataset's range (the bundled grid is global so
+   any input longitude works).
+2. Computes fractional cell coordinates `(fx, fy)` in cell-center space.
+3. Bilinearly interpolates the four corner elevations. If any corner is
+   nodata (sentinel `-1e30`), defers to the fallback rather than averaging,
+   to avoid producing spurious shallow shelves at the land/water cliff.
+4. Returns `max(0, -elevation_m)` so positive output means meters below sea
+   level (land returns 0).
+
+Higher-resolution variants (10 m ≈ 9 MB binary, 6 m ≈ 25 MB) can be downloaded
+by running `tools/fetch_env_data.py bathymetry --resolution 10m`.
+
+#### 6.2.2 ProceduralBathymetry (fallback)
+
+The procedural implementation produces a believable shape — deep offshore,
+shallow on the shelf, canyons-and-ridges noise — without any data dependency.
+It serves two purposes: a fallback when the raster file is missing, and a
+spatial back-stop for raster queries that land outside the raster's bbox
+(e.g., a high-resolution regional `.bath` file with only Pacific coverage
+would defer to the procedural model in the Atlantic). It:
 
 - **Builds a global 720 × 360 distance-to-coast grid** (half-degree resolution)
   at construction by classifying each cell center as land or water through the
@@ -452,11 +537,65 @@ The simulation manager queries `depth_at()` once per physics step and stores the
 result in `Environment::sea_floor_depth_m`; the dynamics flag `grounded = true`
 whenever the sub's depth meets or exceeds it.
 
-### 6.3 Synthetic current field
+### 6.3 Ocean currents
 
-`server/{include,src}/physics/currents.{hpp,cpp}` provides a `CurrentField`
-interface and a `SyntheticCurrentField` that returns a **world-frame** velocity
-vector `(u_east, v_north, 0)` in m/s at any (lat, lon, depth). The field is the
+As with bathymetry, the system ships with **two** implementations of a common
+virtual interface, with `RasterCurrentField` preferred and
+`SyntheticCurrentField` as a fallback for missing files or queries outside
+coverage.
+
+#### 6.3.1 RasterCurrentField (real HYCOM)
+
+The bundled dataset (`server/data/hycom_1deg_7depths.curr`, ~7 MB) is a single
+snapshot from **HYCOM GLBy0.08 expt_93.0**, the U.S. Navy's operational
+1/12-degree global ocean reanalysis. We subset it via OPeNDAP to a coarser
+1° resolution and **seven standard depth levels** (0, 10, 30, 50, 100, 200,
+500 m), keeping `water_u` (east-positive m/s) and `water_v` (north-positive
+m/s). The binary format (`CurrentsHeader` — 96-byte header + depth axis +
+two `float32` blocks `[n_levels][height][width]`) is described in
+`physics/raster_grid.hpp`.
+
+`velocity_at(LatLon, depth_m)` performs **trilinear interpolation** in
+(lat, lon, depth):
+1. Wraps longitude if the dataset is global (HYCOM is 0°–360°).
+2. Brackets the query depth between two adjacent depth levels; clamps to the
+   surface or to the deepest level on out-of-range queries (no extrapolation).
+3. Bilinearly interpolates `u` and `v` on each bracketing depth plane.
+   Corner-by-corner nodata handling replaces masked corners with the mean of
+   the valid corners so a single missing cell doesn't take out the whole
+   interpolation.
+4. Linearly blends the two planes by the bracketed depth fraction.
+5. Returns `(u, v, 0)` — the underlying product has no vertical component.
+
+Real-data validation against well-known currents:
+
+| Location | Bearing | Mean magnitude | Comment |
+|---|---|---|---|
+| Kuroshio Extension (35°N, 145°E) | 60° | 0.68 m/s | Eastward at the Kuroshio extension axis ✓ |
+| Gulf Stream (39°N, 67°W) | 349° | 0.38 m/s | NE meander typical of mid-Atlantic ✓ |
+| Agulhas Return (38°S, 38°E) | 54° | 0.64 m/s | Northeast retroflection direction ✓ |
+| Pacific Equator (0°, 160°W) | 282° | 0.85 m/s | Westward — the South Equatorial Current ✓ |
+| ACC near Drake Passage (57°S, 65°W) | 32° | 0.45 m/s | Eastward circumpolar flow component ✓ |
+
+Depth profile through the Gulf Stream (39°N, 67°W), correctly weakening with
+depth:
+
+| Depth (m) | mean &#124;c&#124; (m/s) | max &#124;c&#124; (m/s) |
+|---|---|---|
+| 0 | 0.657 | 1.123 |
+| 50 | 0.472 | 1.081 |
+| 100 | 0.453 | 0.981 |
+| 200 | 0.380 | 0.907 |
+| 500 | 0.251 | 0.477 |
+
+The preprocessing tool `tools/fetch_env_data.py currents` can re-fetch a
+fresh snapshot or pull a finer grid (`--stride 6` for ½° resolution, etc.).
+
+#### 6.3.2 SyntheticCurrentField (fallback)
+
+When the raster file is missing or a query lands outside the raster's bbox,
+the synthetic field takes over. It returns a **world-frame** velocity vector
+`(u_east, v_north, 0)` in m/s at any (lat, lon, depth). The field is the
 sum of six layers spanning roughly five orders of magnitude in spatial scale,
 so variation is visible whether you're looking at a continent or a 2 km square
 of ocean:
@@ -480,14 +619,98 @@ typical magnitudes 0.05–0.25 m/s — realistic numbers for non-jet ocean curre
 `exp(−max(0, depth_m) / 200 m)`, an Ekman-like e-folding scale. At 200 m depth
 the field is at 37 % of surface strength; at 600 m, ~5 %.
 
-The interface is virtual so a `RasterCurrentField` reading HYCOM or Copernicus
-forecasts can replace it without touching the dynamics, planner, or UI.
-
 The simulation manager queries `velocity_at(ll, depth)` once per physics step
 and writes the result into `Environment::current_w`. The dynamics use
 `v_rel_b = v_b − R^T · current_w` for *both* damping and the simplified
 propeller-power term, so currents affect drag, attitude, energy consumption,
 and apparent thruster efficiency in physically consistent ways.
+
+### 6.4 Bundled binary grid format
+
+To avoid dragging a NetCDF or HDF5 dependency into the C++ server, the
+preprocessed raster data files are stored in a **versioned, byte-stable
+custom format** with two flavors. Both are documented in
+`server/include/physics/raster_grid.hpp`.
+
+#### .bath (BathyHeader + elev grid)
+
+```
+offset  type    field           notes
+─────────────────────────────────────────────────────────────────
+  0     u32     magic           = 0x59485442  ("BTHY", little-endian)
+  4     u32     version         = 1
+  8     u32     width           longitudinal cell count
+ 12     u32     height          latitudinal cell count
+ 16     f64     lat_min         southern edge (cell-center conv.)
+ 24     f64     lat_max         northern edge
+ 32     f64     lon_min         western edge
+ 40     f64     lon_max         eastern edge
+ 48     f32     nodata_value    sentinel (typically -1e30 or NaN)
+ 52     u8[12]  pad             reserved
+ 64     f32[w*h] elev_m          row-major; j=0 = lat_min row
+                                negative = below MSL (depth)
+                                positive = land elevation
+```
+
+#### .curr (CurrentsHeader + depth axis + u, v blocks)
+
+```
+offset   type        field           notes
+─────────────────────────────────────────────────────────────────
+   0     u32         magic           = 0x52525543  ("CURR", LE)
+   4     u32         version         = 1
+   8     u32         width
+  12     u32         height
+  16     u32         n_levels
+  20     u32         reserved        = 0
+  24     f64         lat_min
+  32     f64         lat_max
+  40     f64         lon_min
+  48     f64         lon_max
+  56     f32         nodata_value
+  60     u8[36]      pad             reserved
+  96     f32[n_levels]   depths_m    monotonic, ≥ 0
+        f32[n_levels*h*w] u_east_m_s  level-major, row-major
+        f32[n_levels*h*w] v_north_m_s level-major, row-major
+```
+
+Both formats use little-endian throughout; both use a cell-center sample
+convention; both expose `nodata_value` so source mask flags survive the
+roundtrip. The C++ readers validate magic, version, dimension sanity, and bbox
+sanity before mapping any data, so a corrupted or wrong-version file errors
+out cleanly with a logged message rather than producing garbage.
+
+### 6.5 Preprocessing tool (`tools/fetch_env_data.py`)
+
+A self-contained Python script that downloads source data and writes our
+binary format. Requires `pip install h5py numpy` (or `netCDF4` instead of
+`h5py`) — a venv setup is in the repo root (`.venv/`).
+
+```sh
+# Fetch both default datasets (≈11 MB total):
+python3 tools/fetch_env_data.py bundle
+
+# Or fetch them individually:
+python3 tools/fetch_env_data.py bathymetry --resolution 15m
+python3 tools/fetch_env_data.py currents --stride 12 --time-idx 100
+```
+
+Implementation notes:
+
+- **Bathymetry path:** downloads `earth_relief_{15m,10m,06m}_p.grd` from the
+  Generic Mapping Tools server, reads with `h5py` (or `netCDF4` if installed),
+  normalizes axis ordering so the output's `j=0` row is at the minimum latitude,
+  replaces NaN/inf with the nodata sentinel, packs to `.bath`.
+- **Currents path:** issues per-(variable, depth-level) ASCII subset requests
+  to HYCOM's THREDDS OPeNDAP server at `tds.hycom.org`, parses the
+  multi-block response into NumPy arrays, decodes HYCOM's
+  `Int16 scale_factor=0.001 fill=-30000` packing into float m/s, normalizes
+  axis ordering, packs to `.curr`. Retries each request up to 3 times.
+- Both subcommands emit a one-line summary on success with the cell count,
+  bbox, and value range so you can sanity-check before launching the server.
+
+The tool is the **only** consumer of NetCDF/HDF5 in the project; the runtime
+server has no such dependency.
 
 ---
 
@@ -829,14 +1052,17 @@ of samples per simulated second as a 1× run.
 - **The land mask is geographic, not bathymetric.** A point in open water is
   classified as "not land" even if the seafloor there is technically above
   current sea level (it never is in practice). The grounding check uses the
-  procedural bathymetry, not the land mask.
-- **Bathymetry is procedural.** The shape is convincing — deep offshore,
-  shallow on the shelf, canyons-and-ridges noise — but the absolute numbers
-  won't match charts. The `Bathymetry` interface is the swap point for real
-  GEBCO/ETOPO data.
-- **Currents are synthetic and steady-state.** No time variation, no tides,
-  no inertial response.
-- **Vertical currents are zero** in the synthetic field.
+  raster bathymetry's actual sea-floor depth, not the land mask.
+- **Bathymetry resolution.** The bundled raster is 15-arc-minute (≈ 28 km
+  cells). Coastal canyons smaller than ~30 km will be blurred. Run
+  `tools/fetch_env_data.py bathymetry --resolution 06m` for a 6-arc-minute
+  variant (≈ 11 km cells, ~25 MB).
+- **Currents are a single HYCOM snapshot, not time-resolved.** The bundled
+  file represents one instant; there is no diurnal cycle, no tides, no
+  inertial response, and no time interpolation. The trilinear interpolator
+  handles space and depth but holds time constant.
+- **Vertical currents are zero.** Neither HYCOM `uv3z` nor the synthetic
+  fallback provides a `w` component.
 - **The planner energy estimate uses a `k·v³ + idle` model independent of the
   vehicle parameters.** Don't expect tight agreement with the actual energy
   the dynamics report; the dynamics are the source of truth.
@@ -847,12 +1073,16 @@ of samples per simulated second as a 1× run.
 
 ## 12. Future work
 
-- **Real bathymetry data path.** Drop in a `RasterBathymetry` that loads a
-  packed Float32 grid from disk. Tools to subset GEBCO/ETOPO to a region and
-  format for this loader.
-- **Real current data path.** `RasterCurrentField` reading HYCOM /
-  Copernicus Marine forecasts; binary upload of a (u, v) grid per depth
-  level over a bbox.
+- **Time-varying currents.** The current `RasterCurrentField` holds a single
+  HYCOM snapshot in memory and ignores the time axis. A time-varying variant
+  would memory-map a stack of timestamped snapshots and add a 4th
+  interpolation dimension. The OPeNDAP query path in `fetch_env_data.py`
+  already supports time indexing.
+- **Multi-resolution raster pyramid.** When a regional 1-arc-minute coastal
+  bathymetry is loaded, the global 15-arc-minute should still serve as the
+  outer-bbox fallback. This is already supported by the fallback wiring
+  pattern; the missing piece is composing multiple `RasterBathymetry` objects
+  in priority order rather than a single raster + procedural.
 - **Vehicle classes beyond torpedo.** Glider (no thrusters except a tail
   rudder, depth driven by buoyancy engine) and hover-class (downward
   thrusters dominant, low forward drag) sharing the same `VehicleParams`

@@ -32,6 +32,8 @@ add_executable(bathyscaphe
     src/physics/dynamics.cpp
     src/physics/integrator.cpp
     src/physics/powertrain.cpp
+    src/physics/raster_bathymetry.cpp
+    src/physics/raster_current_field.cpp
     src/planner/planner.cpp
     src/geo/coords.cpp
     src/geo/land_mask.cpp
