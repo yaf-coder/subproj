@@ -65,27 +65,40 @@ two communicate over HTTP plus Server-Sent Events (SSE) for live state streaming
 │   │   track     │  └──────────────┘  └────────────────────────────────┘│
 │   │   bathy raster overlay (canvas → image source)                     │
 │   │   currents arrow markers                                            │
-│   │   playback bar (timeline + speed)                                   │
+│   │   playback bar — scrub spans full precomputed range                │
 │   └─────────────┘                                                       │
 └──────────────────────────────▲──────────────────────────────────────────┘
                   REST + SSE   │   /api/{mission, control, stream, ...}
-                               │   Vite dev proxy: 5173 → 8080
+                               │   set_cursor for scrub-the-server-cursor
 ┌──────────────────────────────▼──────────────────────────────────────────┐
 │ Server (C++17, single binary)                                           │
 │                                                                         │
-│  ┌──────────────────┐  ┌──────────────┐  ┌─────────────────────────┐   │
-│  │ SimulationManager│  │ Planner       │  │ HTTP/SSE (cpp-httplib) │   │
-│  │  - 200 Hz RK4    │◄─┤  - great-circ │◄─┤  - REST endpoints      │   │
-│  │  - PID ctlr      │  │  - A* land    │  │  - /api/stream (SSE)   │   │
-│  │  - history log   │  │    avoidance  │  └─────────────────────────┘   │
-│  └────────▲─────────┘  └──────┬───────┘                                 │
-│           │                   │                                          │
-│  ┌────────┴───────────────────┴────────────────────────────────────┐    │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ SimulationManager (precompute-then-replay)                       │   │
+│  │                                                                  │   │
+│  │   precompute_thread_  (background, ~125× real-time)              │   │
+│  │   ────────────────► fills history_ via RK4 + PID controller      │   │
+│  │                                                                  │   │
+│  │   loop_ (~30 Hz wall, animates cursor through history_)          │   │
+│  │   ────────────────► cursor_t_s_ += dt_wall * speed_              │   │
+│  │                                                                  │   │
+│  │   snapshot() = lerp(history_[i], history_[i+1]) at cursor_t_s_   │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│           ▲                                ▲                            │
+│           │ uses                           │ uses                       │
+│  ┌────────┴──────────┐         ┌──────────┴──────────────────────────┐ │
+│  │ Planner            │         │ HTTP/SSE (cpp-httplib)             │ │
+│  │  - great-circle    │         │  - /api/{mission, control,         │ │
+│  │  - A* land-avoid   │         │     snapshot, plan, stream,        │ │
+│  └────────────────────┘         │     history, bathymetry, currents, │ │
+│                                 │     vehicle, health}               │ │
+│                                 └────────────────────────────────────┘ │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
 │  │ Physics: dynamics, integrator, powertrain                       │    │
 │  └─────────────────────────────────────────────────────────────────┘    │
 │  ┌─────────────────────────────────────────────────────────────────┐    │
-│  │ Environment: LandMask (GeoJSON), ProceduralBathymetry,          │    │
-│  │              SyntheticCurrentField                              │    │
+│  │ Environment: LandMask, Raster+Procedural Bathymetry,            │    │
+│  │              Raster+Synthetic CurrentField                      │    │
 │  └─────────────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -750,61 +763,147 @@ The stern lateral thruster has a sign-flipped relationship between commanded
 thrust and yaw moment (because its position is aft and its axis is `+y`), which
 is handled inside the controller.
 
-### 7.2 Simulation manager
+### 7.2 Simulation manager (precompute + replay model)
 
-`server/{include,src}/sim/sim_manager.{hpp,cpp}` is the orchestrator. It owns:
+`server/{include,src}/sim/sim_manager.{hpp,cpp}` is the orchestrator. The
+architecture is **precompute-then-replay**, not live-physics: a background
+thread runs the entire mission's physics as fast as the CPU allows, filling a
+history buffer; the playback loop then just walks a cursor through that
+history at the user's chosen wall-clock speed. There is no live physics
+during playback — `Play` is animation, not simulation.
 
-- the integrated `physics::State` and the latest `DynamicsTelemetry`,
+The class owns:
+
+- the integrated `physics::State` and the latest `DynamicsTelemetry` (used
+  only inside the precompute thread),
 - the active `VehicleParams`,
-- the current `Plan`, the **local ENU `LocalFrame`** anchored at mission start,
-  and the current waypoint index,
+- the current `Plan` and the **local ENU `LocalFrame`** anchored at mission
+  start,
 - pointers (non-owning) to the `LandMask`, `Bathymetry`, and `CurrentField`,
-- PID controller state (integrators + previous measurements + filtered derivatives),
-- a recorded **history** of `StateSnapshot` entries at fixed sim-time intervals,
-- playback **speed** and pause/play state, all guarded by `std::mutex mu_`.
+- PID controller state (used only during precompute),
+- a recorded **history** of `StateSnapshot` entries at 10 Hz of sim time,
+- a **playback cursor** (`cursor_t_s_`), playback **speed**, and pause/play
+  flag, all guarded by `std::mutex mu_`,
+- a background `precompute_thread_` and an atomic `precompute_should_stop_`
+  flag for cancellation.
 
-The physics thread, started by `start_loop()`, runs:
+#### 7.2.1 The precompute thread
+
+When `load_plan()` (or `set_vehicle()` while a plan is loaded) is called:
+
+1. Any in-flight precompute thread is signaled to stop and joined.
+2. Under `mu_`, the new plan/vehicle is installed and physics state
+   (integrator, PID terms, history) is reset.
+3. A new precompute thread is spawned and `load_plan()` returns
+   **immediately** (≈ 40 ms total for the HTTP handler).
+
+The precompute thread runs in batches:
 
 ```
-while not stop_requested:
+while not should_stop and total_steps < cap:
     lock mu_
-    wait on cv_ until (stop or running)
-    if running:
-        // For speed >= 1: N physics steps per wall tick, wall_dt = sim_dt.
-        // For speed <  1: 1 physics step per wall tick, wall_dt = sim_dt / speed.
-        if speed >= 1.0:
-            steps   = round(speed)
-            wall_dt = sim_dt          // 5 ms
-        else:
-            steps   = 1
-            wall_dt = sim_dt / speed
-        steps = min(steps, 5000)   // hard cap so a runaway can't lock up
-        for i in 0..steps:
-            step_locked(sim_dt)
+        run kBatchSteps (500) RK4 physics steps via advance_physics_step_locked
+        append StateSnapshot to history every 100 ms of sim time
+        if finished_:
+            push final snapshot
+            break
     unlock mu_
-    sleep_until(next_tick += wall_dt)
+    sleep 50 µs   // yield to other handlers
 ```
 
-This pacing decouples integration step size from playback rate. RK4 stability
-depends only on `sim_dt = 5 ms`; speed just controls how many integration steps
-happen per wall-clock tick. At 16× speed the loop runs 16 RK4 steps every 5 ms
-of wall clock; SSE telemetry still streams at ~30 wall-Hz, so the sub appears
-to fly 16× faster on the map.
+500 steps × ~40 µs per step = ~20 ms of lock-holding per batch, then a brief
+release. Other operations (snapshot reads, control commands, history fetches)
+get periodic windows so the server stays responsive while precompute runs.
 
-`step_locked()` does, in order:
+On a typical mission of a few hundred sim-seconds, the entire mission is
+precomputed in 2–6 wall-seconds. For very long or non-terminating missions,
+precompute is hard-capped at 7200 sim-seconds (`kMaxPrecomputeSimSeconds`) so
+it always finishes within ~60 wall-seconds.
+
+`advance_physics_step_locked()` is the per-step work and does, in order:
 
 1. Refresh `Environment::sea_floor_depth_m` and `Environment::current_w` from
    the bathymetry and current field at the sub's current lat/lon and depth.
 2. Compute thruster commands via the PID controller.
 3. Integrate one RK4 step.
-4. Check the **land safety condition** — if the sub's lat/lon has moved into a
-   land cell, set `grounded`, mark `finished`, and stop the sim.
-5. Check **waypoint advancement** — within 5 m horizontal and 2 m vertical of
-   the current waypoint, increment `wp_idx_` and reset PID integrators.
-6. Check **battery brownout** — if `SoC ≤ 0.02`, finish the mission.
-7. Append a `StateSnapshot` to the history if the accumulated sim time since
-   the last snapshot crosses `kHistoryDt = 0.1 s` (i.e., 10 Hz of sim time).
-   History is capped at 200 000 entries.
+4. Check the **land safety condition** — if the sub's lat/lon has moved into
+   a land cell, set `grounded`, mark `finished`, return.
+5. Check **waypoint advancement** — within 10 m horizontal and 4 m vertical
+   of the current waypoint (6 m / 3 m for the final waypoint), increment
+   `wp_idx_` and reset PID integrators. The generous tolerance accommodates
+   real currents pushing the sub off-station faster than the PID can fully
+   compensate.
+6. Check **battery brownout** — if `SoC ≤ 0.02`, finish.
+7. Append a `StateSnapshot` every 100 ms of sim time. History is capped at
+   200 000 entries.
+
+#### 7.2.2 The playback loop
+
+The main loop, started by `start_loop()` at server startup, is now a
+wall-clock animator that never runs physics:
+
+```
+while not stop_requested:
+    lock mu_
+    wait on cv_ until (stop or running)
+    if running and history not empty:
+        max_t = history.back().t_sim_s
+        if cursor < max_t:
+            cursor += 33ms * speed
+            if cursor > max_t: cursor = max_t
+        elif finished_ and not precompute_busy_:
+            // mission complete and we've watched it all: stop
+            running = false
+        // else: precompute is still filling history ahead of us;
+        // hold the cursor and wait for more.
+    unlock mu_
+    sleep until next 33ms wall tick
+```
+
+`speed_` is the multiplier on cursor advance vs wall-clock. At 1× the cursor
+advances at real-time pace; at 16× the cursor advances 16 sim-seconds per
+wall-second. The SSE stream samples the cursor's interpolated snapshot at
+~30 Hz, so the sub appears to fly through the map smoothly even at high
+playback speeds.
+
+#### 7.2.3 Interpolated snapshots
+
+The /api/snapshot endpoint and the SSE stream both call
+`interpolated_snapshot_locked()`, which binary-searches `history_` for the
+two entries bracketing `cursor_t_s_` and linearly interpolates between them.
+All numeric fields (lat, lon, depth, speed, attitude, SoC, voltage, power,
+energy, distance) are lerped; **heading uses an angle-aware lerp** that
+takes the short way around the ±180° seam; integer fields (current waypoint)
+use nearest-neighbor.
+
+The `finished` flag in the returned snapshot is **derived**: true only when
+the precompute completed AND the cursor is at the very end of history.
+Scrubbing back to the middle of a completed mission correctly reports
+`finished = false` because the mission "had not yet finished at that point
+in time."
+
+#### 7.2.4 Scrubbing the entire timeline
+
+The `/api/control` endpoint accepts a `set_cursor` action with a sim-time
+value, which jumps `cursor_t_s_` to the requested time (clamped to
+`[0, history.back().t]`). The frontend's playback bar:
+
+- Updates the slider's *max* to `history.length − 1` as precompute fills
+  history (so the scrub range grows in front of the user's eyes).
+- During live playback, snaps the slider's *value* to the index closest to
+  the server cursor on every SSE message.
+- On slider drag (`input` event), updates the local display at zero
+  latency — does not touch the server.
+- On slider release (`change` event), POSTs `set_cursor` so the server's
+  playback cursor jumps to the dropped position. Hitting Play after a
+  scrub resumes playback from there.
+- `GO LIVE` snaps the slider back to the server's current cursor position
+  (which may be anywhere in the precomputed range, not necessarily at the
+  end).
+
+Because precompute runs ~100× faster than 1× real-time playback, the user
+can scrub anywhere in the mission within a few seconds of hitting Plan —
+including parts they have never "watched."
 
 ### 7.3 Mission planner with A* land avoidance
 
@@ -881,7 +980,7 @@ headers. A blanket `OPTIONS` handler returns 204 for preflight.
 |---|---|---|---|
 | `GET` | `/api/health` | — | Liveness check (`{"ok": true}`). |
 | `POST` | `/api/mission` | `{start_lat, start_lon, goal_lat, goal_lon, cruise_depth_m, cruise_speed_m_s, descent_rate_m_s, sample_spacing_m?}` | Plans a mission, loads it into the sim, returns the plan. On planner error (e.g., goal on land) returns `HTTP 422` with the plan JSON containing an `error` string and empty waypoints. |
-| `POST` | `/api/control` | `{action: "play" \| "pause" \| "reset" \| "set_speed", value?}` | Sim control. `set_speed` requires `value` (playback multiplier, clamped to `[0.1, 32.0]`). |
+| `POST` | `/api/control` | `{action: "play" \| "pause" \| "reset" \| "set_speed" \| "set_cursor", value?}` | Sim control. `set_speed` requires `value` (playback multiplier, clamped to `[0.1, 32.0]`). `set_cursor` requires `value` (sim seconds; clamped to `[0, history.back().t]`). `play` from the very end of a finished mission rewinds to t=0; `play` while precompute is still running holds at the end of available history until more arrives. |
 | `GET` | `/api/snapshot` | — | One-shot current state, same shape as the SSE messages. |
 | `GET` | `/api/plan` | — | The currently loaded plan. |
 | `GET` | `/api/stream` | — | **SSE** stream of `StateSnapshot` JSON at ~30 Hz of wall-clock time. Each event is a single `data: {...}\n\n`. |
@@ -1043,12 +1142,20 @@ of samples per simulated second as a 1× run.
 - **Server startup ≈ 7–9 s** dominated by the 259 k `LandMask::is_land`
   classifications during bathymetry construction. The chamfer transform
   itself is negligible.
-- **Per-step cost.** The 200 Hz physics loop does one RK4 step (4 calls to
+- **Per-step cost.** The precompute thread runs one RK4 step (4 calls to
   `compute_derivatives`), one `Bathymetry::depth_at` query, one
   `CurrentField::velocity_at` query, one PID evaluation, one waypoint check,
-  and occasionally one snapshot push. The CPU cost on a modern laptop is in
-  the low single-digit-percent range at 1× and rises roughly linearly with
-  speed (16× is ~30 % of one core).
+  and occasionally one snapshot push per ~40 µs on a modern Apple Silicon
+  laptop, giving roughly 25 k physics steps per wall-second or ~125× real-time.
+  The playback loop is essentially free (cursor arithmetic + one
+  interpolation per SSE tick).
+- **Precompute blocks one core fully.** When the mission is being
+  precomputed, one CPU core saturates for a few wall-seconds. During that
+  window the server is still responsive (the mutex is released between
+  500-step batches) but other queries see ~20 ms of added latency.
+- **Precompute cap.** Hard-limited to 7200 sim-seconds. Non-terminating
+  missions (e.g., the sub can never reach the goal because of currents)
+  precompute the full 7200 s then stop with `finished_ = true`.
 - **The land mask is geographic, not bathymetric.** A point in open water is
   classified as "not land" even if the seafloor there is technically above
   current sea level (it never is in practice). The grounding check uses the

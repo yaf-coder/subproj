@@ -70,7 +70,7 @@ export async function postMission(req: MissionRequest): Promise<Plan> {
   return body;
 }
 
-export type ControlAction = "play" | "pause" | "reset" | "set_speed";
+export type ControlAction = "play" | "pause" | "reset" | "set_speed" | "set_cursor";
 
 export async function postControl(action: ControlAction, value?: number): Promise<void> {
   const body: Record<string, unknown> = { action };

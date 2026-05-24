@@ -199,6 +199,16 @@ void run_server(sim::SimulationManager& mgr,
             }
             mgr.set_speed(v);
         }
+        else if (action == "set_cursor") {
+            double t = 0.0;
+            if (!find_number(req.body, "value", t)) {
+                res.status = 400;
+                res.set_content("{\"error\":\"set_cursor needs numeric value (sim seconds)\"}",
+                                "application/json");
+                return;
+            }
+            mgr.set_cursor(t);
+        }
         else { res.status = 400; res.set_content("{\"error\":\"bad action\"}", "application/json"); return; }
         res.set_content("{\"ok\":true}", "application/json");
     });

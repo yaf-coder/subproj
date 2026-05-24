@@ -54,11 +54,13 @@ const speedBtns = Array.from(
   document.querySelectorAll<HTMLButtonElement>(".pb-speed"),
 );
 
-// Track-line drawing — replay incrementally as new history arrives so the
-// orange "actual track" line on the map always matches what the sub has
-// covered. When scrubbing we don't redraw the whole track; we just leave it.
-let trackDrawnUpTo = 0;
-let lastTrackPushT = -1; // throttle to ~1 Hz of sim-time
+// Track-line drawing. The orange polyline represents "where the sub has been"
+// up to the playback cursor. We rebuild it (rather than appending) so
+// scrubbing backward correctly trims the track to where the cursor now is,
+// and scrubbing forward / playing extends it. Throttled to 200 ms wall-time
+// so a 30 Hz SSE stream doesn't cause 30 Hz polyline rebuilds.
+let lastTrackRefreshMs = 0;
+let lastTrackCursorT = -1;
 
 let stream: EventSource | null = null;
 
@@ -71,14 +73,23 @@ function connectStream() {
       tel.setConnected(
         "ok",
         pb.scrubbing
-          ? `streaming · live t=${s.t.toFixed(1)}s · (scrubbing)`
-          : `streaming · live t=${s.t.toFixed(1)}s`,
+          ? `streaming · cursor t=${s.t.toFixed(1)}s · (scrubbing)`
+          : `streaming · cursor t=${s.t.toFixed(1)}s`,
       );
-      // Always update the chart, regardless of scrub state — charts show
-      // mission history accumulated over time, not the scrub position.
       if (!pb.scrubbing) {
         tel.update(s);
         if (s.plan_loaded) handle.setSub(s.lon, s.lat, s.heading_deg);
+        // Snap the slider to the server's cursor position so the user can
+        // see where the live playback is. (Was previously snapping to the
+        // last history index, which is the END of the precomputed mission.)
+        if (pb.history.length > 0) {
+          const idx = indexForTime(s.t);
+          slider.value = String(idx);
+          updateTimeLabels();
+        }
+        // Extend / update the orange track polyline up to the current
+        // cursor. Throttled inside refreshTrack so this is cheap.
+        refreshTrack(s.t);
       } else {
         // Still feed the chart with the live point so it keeps growing.
         tel.updateChartOnly(s);
@@ -92,6 +103,20 @@ function connectStream() {
 }
 connectStream();
 
+// Binary-search the local history mirror for the index whose `t` is closest
+// to the given sim time. Used to map server cursor times to slider indices.
+function indexForTime(t: number): number {
+  if (pb.history.length === 0) return 0;
+  let lo = 0;
+  let hi = pb.history.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (pb.history[mid].t < t) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
 // ----------------------------- History polling -----------------------------
 
 async function pollHistory() {
@@ -99,26 +124,55 @@ async function pollHistory() {
     const chunk = await fetchHistory(pb.history.length);
     if (chunk.items.length > 0) {
       pb.history.push(...chunk.items);
-      // Update slider range. If we were on the live cursor, follow the new max.
-      const wasAtEnd = !pb.scrubbing;
+      // The scrub range always reflects the full precomputed extent, so
+      // the user can drag past the live playback cursor immediately as
+      // precompute fills history in.
       slider.max = String(Math.max(0, pb.history.length - 1));
-      if (wasAtEnd) slider.value = slider.max;
-
-      // Extend the orange track polyline incrementally.
-      while (trackDrawnUpTo < pb.history.length) {
-        const s = pb.history[trackDrawnUpTo++];
-        if (s.plan_loaded && s.t - lastTrackPushT > 1.0) {
-          handle.appendTrack(s.lon, s.lat);
-          lastTrackPushT = s.t;
-        }
-      }
       updateTimeLabels();
+      // Track may need to extend if precompute caught up to where the
+      // cursor already is. Cheap no-op when there's nothing new to add.
+      refreshTrack(pb.liveSnap?.t ?? 0);
     }
   } catch {
     // ignored
   }
 }
 setInterval(pollHistory, 400);
+
+// Rebuild the orange track polyline to cover history[0..cursor]. We
+// downsample to ~1 sample per sim-second so very long missions don't ship
+// hundreds of thousands of vertices to MapLibre.
+function refreshTrack(cursorT: number, force = false) {
+  if (pb.history.length === 0) {
+    handle.clearTrack();
+    lastTrackCursorT = -1;
+    return;
+  }
+  const now =
+    typeof performance !== "undefined" ? performance.now() : Date.now();
+  if (
+    !force &&
+    now - lastTrackRefreshMs < 200 &&
+    Math.abs(cursorT - lastTrackCursorT) < 0.5
+  ) {
+    return;
+  }
+  lastTrackRefreshMs = now;
+  lastTrackCursorT = cursorT;
+
+  const endIdx = indexForTime(cursorT);
+  const coords: [number, number][] = [];
+  let lastSampledT = -2;
+  for (let i = 0; i <= endIdx && i < pb.history.length; i++) {
+    const e = pb.history[i];
+    if (!e.plan_loaded) continue;
+    if (e.t - lastSampledT >= 1.0 || i === endIdx) {
+      coords.push([e.lon, e.lat]);
+      lastSampledT = e.t;
+    }
+  }
+  handle.setTrack(coords);
+}
 
 // ----------------------------- Slider + LIVE -------------------------------
 
@@ -130,6 +184,10 @@ function updateTimeLabels() {
   timeLabel.textContent = `t = ${t.toFixed(1)} s`;
 }
 
+// While dragging the slider (continuous `input` events): update the local
+// display only — purely visual feedback at zero latency. We do not hit the
+// server on every event because the user can drag the bar dozens of times
+// per second.
 slider.addEventListener("input", () => {
   if (pb.history.length === 0) return;
   pb.scrubbing = true;
@@ -141,21 +199,39 @@ slider.addEventListener("input", () => {
   if (s) {
     tel.updateTextOnly(s);
     if (s.plan_loaded) handle.setSub(s.lon, s.lat, s.heading_deg);
+    refreshTrack(s.t);
   }
   updateTimeLabels();
 });
 
+// On slider release (`change`): move the server's playback cursor to the
+// scrub position so hitting Play resumes from where the user dropped the
+// thumb (instead of jumping back to where the server cursor was before).
+slider.addEventListener("change", () => {
+  if (pb.history.length === 0) return;
+  const idx = Math.min(parseInt(slider.value, 10), pb.history.length - 1);
+  const s = pb.history[idx];
+  if (s) postControl("set_cursor", s.t).catch(console.error);
+});
+
+// GO LIVE jumps to wherever the server's playback cursor currently is —
+// not to the end of precomputed history. The two are different now: the
+// precomputed history may extend hundreds of sim-seconds ahead of where
+// the live playback has actually progressed.
 liveBtn.addEventListener("click", () => {
   pb.scrubbing = false;
-  slider.value = String(Math.max(0, pb.history.length - 1));
-  liveBtn.classList.remove("scrubbing");
-  liveBtn.classList.add("live-active");
-  liveBtn.textContent = "LIVE";
-  if (pb.liveSnap) {
+  if (pb.liveSnap && pb.history.length > 0) {
+    slider.value = String(indexForTime(pb.liveSnap.t));
     tel.update(pb.liveSnap);
     if (pb.liveSnap.plan_loaded)
       handle.setSub(pb.liveSnap.lon, pb.liveSnap.lat, pb.liveSnap.heading_deg);
+    refreshTrack(pb.liveSnap.t, true);
+  } else {
+    slider.value = "0";
   }
+  liveBtn.classList.remove("scrubbing");
+  liveBtn.classList.add("live-active");
+  liveBtn.textContent = "LIVE";
   updateTimeLabels();
 });
 // Start in live mode visually.
@@ -210,8 +286,9 @@ function resetClientHistory() {
   pb.history = [];
   pb.scrubbing = false;
   pb.liveSnap = null;
-  trackDrawnUpTo = 0;
-  lastTrackPushT = -1;
+  lastTrackRefreshMs = 0;
+  lastTrackCursorT = -1;
+  handle.clearTrack();
   slider.max = "0";
   slider.value = "0";
   liveBtn.classList.remove("scrubbing");

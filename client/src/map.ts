@@ -21,6 +21,7 @@ export interface MapHandle {
   setRoute(plan: Plan | null): void;
   setSub(lng: number, lat: number, heading_deg: number): void;
   appendTrack(lng: number, lat: number): void;
+  setTrack(coords: [number, number][]): void;
   clearTrack(): void;
   setBathymetry(grid: BathyGrid | null): void;
   setBathymetryVisible(v: boolean): void;
@@ -272,6 +273,13 @@ export function initMap(container: HTMLElement, onClick: (lng: number, lat: numb
       const src = map.getSource("track") as maplibregl.GeoJSONSource | undefined;
       if (src) src.setData(lineFC(trackCoords));
     },
+    setTrack(coords) {
+      trackCoords.length = 0;
+      trackCoords.push(...coords);
+      const src = map.getSource("track") as maplibregl.GeoJSONSource | undefined;
+      if (src) src.setData(lineFC(trackCoords));
+    },
+
     clearTrack() {
       trackCoords.length = 0;
       const src = map.getSource("track") as maplibregl.GeoJSONSource | undefined;

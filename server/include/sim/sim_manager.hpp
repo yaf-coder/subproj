@@ -54,12 +54,25 @@ public:
     void set_land_mask(const geo::LandMask* land); // not owning; may be null
     void set_bathymetry(const physics::Bathymetry* b);
     void set_currents(const physics::CurrentField* c);
+
+    // load_plan() synchronously runs the entire mission's physics to
+    // completion (or to a generous time cap), populates the full history,
+    // then leaves the playback cursor at t=0. After load_plan() returns,
+    // the entire timeline is available for scrubbing.
     void load_plan(planner::Plan plan, geo::LatLon origin);
+
+    // Playback controls — these manipulate a cursor that walks through the
+    // precomputed history at wall-clock speed * the playback speed. They do
+    // not re-run physics.
     void play();
     void pause();
     void reset_to_start();
-    void set_speed(double s); // playback multiplier; clamped to [0.1, 32.0]
+    void set_speed(double s);    // playback multiplier; clamped to [0.1, 32.0]
     double speed() const;
+    void set_cursor(double t_sim_s); // jump cursor to sim time t
+    double cursor_t() const;
+    double total_duration_s() const; // sim-time covered by history (0 if no plan)
+
     void start_loop();
     void stop_loop();
 
@@ -73,14 +86,35 @@ public:
 
 private:
     void loop();
-    void step_locked(double dt);
+    // Runs one physics RK4 step plus all associated bookkeeping (land safety,
+    // waypoint advancement, brownout check, history record). Used only by
+    // the precompute phase — the runtime loop() never calls this.
+    void advance_physics_step_locked(double dt);
     physics::ThrusterCommands compute_commands_locked();
     StateSnapshot make_snapshot_locked() const;
+    // Build a snapshot at the current playback cursor by linearly
+    // interpolating between adjacent history entries.
+    StateSnapshot interpolated_snapshot_locked() const;
+    // Stops any precompute thread and waits for it to exit.
+    void cancel_precompute();
+    // Spawns a background thread that runs advance_physics_step_locked
+    // repeatedly until the mission ends or precompute_should_stop_ is set.
+    // The thread releases the mutex periodically so other handlers can run.
+    void spawn_precompute();
+    void precompute_main();
+    // Reset all per-mission physics state in preparation for a new precompute.
+    // Caller must hold mu_.
+    void reset_physics_for_precompute_locked();
 
     mutable std::mutex mu_;
     std::condition_variable cv_;
     std::thread thread_;
     std::atomic<bool> stop_thread_{false};
+
+    // Background precompute thread + cancellation flag.
+    std::thread precompute_thread_;
+    std::atomic<bool> precompute_should_stop_{false};
+    std::atomic<bool> precompute_busy_{false};
 
     physics::State state_;
     physics::VehicleParams vehicle_;
@@ -112,11 +146,16 @@ private:
     const physics::Bathymetry* bath_ = nullptr;
     const physics::CurrentField* currents_ = nullptr;
 
-    // Playback control.
-    double speed_ = 1.0;
+    // Physics step size for precompute. The runtime loop has a different
+    // (wall-clock-driven) cadence.
     double sim_dt_ = 0.005; // 200 Hz physics
 
-    // History recording.
+    // Playback state.
+    double speed_ = 1.0;       // multiplier on cursor advance vs wall-clock
+    double cursor_t_s_ = 0.0;  // current playback time within the precomputed history
+
+    // History recording: written by advance_physics_step_locked during
+    // precompute; read by the playback loop and the /api/history endpoint.
     static constexpr double kHistoryDt = 0.1; // 10 Hz of sim-time
     double history_accum_ = 0.0;
     std::vector<StateSnapshot> history_;
