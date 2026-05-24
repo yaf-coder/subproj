@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace bathy::planner {
+namespace swordfish::planner {
 
 struct Waypoint {
     geo::LatLon ll;
@@ -48,4 +48,4 @@ struct Plan {
 //   P_cruise ~ k_drag * v^3 + idle
 Plan plan_mission(const MissionRequest& req, const geo::LandMask* land = nullptr);
 
-} // namespace bathy::planner
+} // namespace swordfish::planner

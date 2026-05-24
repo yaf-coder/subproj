@@ -6,7 +6,7 @@
 #include <iostream>
 #include <limits>
 
-namespace bathy::physics {
+namespace swordfish::physics {
 
 namespace {
 constexpr double kPi = 3.14159265358979323846;
@@ -160,4 +160,4 @@ double ProceduralBathymetry::depth_at(geo::LatLon ll) const {
     return depth;
 }
 
-} // namespace bathy::physics
+} // namespace swordfish::physics

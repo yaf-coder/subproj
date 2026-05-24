@@ -9,7 +9,7 @@
 #include <iostream>
 #include <sstream>
 
-namespace bathy::geo {
+namespace swordfish::geo {
 
 namespace {
 
@@ -304,4 +304,4 @@ bool LandMask::load_geojson(const std::string& path) {
     return loaded_;
 }
 
-} // namespace bathy::geo
+} // namespace swordfish::geo

@@ -8,7 +8,7 @@
 #include <fstream>
 #include <iostream>
 
-namespace bathy::physics {
+namespace swordfish::physics {
 
 namespace {
 inline bool is_nodata(float v, float sentinel) {
@@ -165,4 +165,4 @@ double RasterBathymetry::depth_at(geo::LatLon ll) const {
     return 0.0;
 }
 
-} // namespace bathy::physics
+} // namespace swordfish::physics

@@ -2,7 +2,7 @@
 
 #include <Eigen/Dense>
 
-namespace bathy::physics {
+namespace swordfish::physics {
 
 // Environment is intentionally minimal for M1. M2 adds bathymetry sampling and currents.
 struct Environment {
@@ -13,4 +13,4 @@ struct Environment {
     Eigen::Vector3d current_w = Eigen::Vector3d::Zero(); // world-frame current m/s
 };
 
-} // namespace bathy::physics
+} // namespace swordfish::physics

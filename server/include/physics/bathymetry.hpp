@@ -6,7 +6,7 @@
 #include <memory>
 #include <vector>
 
-namespace bathy::physics {
+namespace swordfish::physics {
 
 // Bathymetry: depth of the seafloor at a given (lat, lon).
 //
@@ -57,4 +57,4 @@ private:
     static double shelf_curve_m(double dist_m);
 };
 
-} // namespace bathy::physics
+} // namespace swordfish::physics

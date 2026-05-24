@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace bathy::geo {
+namespace swordfish::geo {
 
 // Land mask backed by Natural Earth land polygons (or any GeoJSON
 // FeatureCollection of Polygon / MultiPolygon features in WGS84 lon/lat).
@@ -72,4 +72,4 @@ private:
     std::array<std::vector<int>, kIxLon * kIxLat> index_;
 };
 
-} // namespace bathy::geo
+} // namespace swordfish::geo

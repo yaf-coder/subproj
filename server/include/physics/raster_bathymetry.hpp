@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace bathy::physics {
+namespace swordfish::physics {
 
 // RasterBathymetry samples bathymetry from a preprocessed binary grid
 // (.bath file, see physics/raster_grid.hpp). At query time it bilinearly
@@ -60,4 +60,4 @@ private:
     std::vector<float> elev_;
 };
 
-} // namespace bathy::physics
+} // namespace swordfish::physics

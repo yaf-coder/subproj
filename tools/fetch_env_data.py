@@ -85,7 +85,7 @@ GMT_BATHY_URLS = {
 
 def http_get(url: str, dst_path: Path, timeout: int = 240) -> None:
     log(f"GET {url}")
-    req = urllib.request.Request(url, headers={"User-Agent": "bathyscaphe-fetch/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "swordfish-fetch/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         if resp.status != 200:
             raise RuntimeError(f"HTTP {resp.status} for {url}")
@@ -244,7 +244,7 @@ def hycom_ascii_subset(var: str, time_idx: int, depth_idx: int,
     qs = urllib.parse.quote(spec, safe=":[],")
     url = f"{HYCOM_BASE}.ascii?{qs}"
     log(f"  HYCOM {var} t={time_idx} d_idx={depth_idx} ({HYCOM_DEPTHS_M[depth_idx]} m)")
-    req = urllib.request.Request(url, headers={"User-Agent": "bathyscaphe-fetch/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "swordfish-fetch/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         if resp.status != 200:
             raise RuntimeError(f"HTTP {resp.status} for {url}")

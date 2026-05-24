@@ -2,7 +2,7 @@
 
 #include <cmath>
 
-namespace bathy::geo {
+namespace swordfish::geo {
 
 namespace {
 constexpr double kEarthR = 6371000.0;
@@ -40,4 +40,4 @@ double great_circle_m(LatLon a, LatLon b) {
     return 2.0 * kEarthR * std::asin(std::sqrt(std::clamp(h, 0.0, 1.0)));
 }
 
-} // namespace bathy::geo
+} // namespace swordfish::geo

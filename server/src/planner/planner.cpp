@@ -6,7 +6,7 @@
 #include <queue>
 #include <vector>
 
-namespace bathy::planner {
+namespace swordfish::planner {
 
 namespace {
 constexpr double kPi = 3.14159265358979323846;
@@ -331,4 +331,4 @@ Plan plan_mission(const MissionRequest& req, const geo::LandMask* land) {
     return p;
 }
 
-} // namespace bathy::planner
+} // namespace swordfish::planner

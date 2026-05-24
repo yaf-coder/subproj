@@ -1,6 +1,6 @@
 #include "physics/integrator.hpp"
 
-namespace bathy::physics {
+namespace swordfish::physics {
 
 namespace {
 
@@ -47,4 +47,4 @@ State rk4_step(const State& s, double dt, const VehicleParams& v,
     return apply(s, weighted(k1, k2, k3, k4), dt);
 }
 
-} // namespace bathy::physics
+} // namespace swordfish::physics

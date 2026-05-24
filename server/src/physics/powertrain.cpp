@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace bathy::physics {
+namespace swordfish::physics {
 
 MotorOutput motor_step(const MotorParams& m, double power_mech_W, double load) {
     load = std::clamp(std::fabs(load), 0.0, 1.0);
@@ -56,4 +56,4 @@ BatteryReading battery_step(const BatteryParams& b, double power_demand_W, doubl
     return BatteryReading{v_term, I, dsoc, dT};
 }
 
-} // namespace bathy::physics
+} // namespace swordfish::physics

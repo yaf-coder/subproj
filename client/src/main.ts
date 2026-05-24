@@ -1,7 +1,7 @@
 import "maplibre-gl/dist/maplibre-gl.css";
 import "uplot/dist/uPlot.min.css";
 
-import { initMap } from "./map";
+import { combineHandles, initMap } from "./map";
 import { Telemetry } from "./telemetry";
 import {
   fetchBathymetry,
@@ -38,7 +38,15 @@ const pb: Playback = { history: [], scrubbing: false, liveSnap: null, speed: 1 }
 // ----------------------------- Wiring --------------------------------------
 
 const mapEl = document.getElementById("map")!;
-const handle = initMap(mapEl, onMapClick);
+const map3dEl = document.getElementById("map-3d")!;
+// Both maps share click + visualization state through `combineHandles`.
+// Clicks on either map place start/goal. The orange track, planned route,
+// start/goal pins, and sub icon all appear on both. Bathymetry colormap
+// and current arrows stay 2D-only (the 3D map shows bathymetry through
+// real terrain so a flat overlay would be redundant).
+const handle2d = initMap(mapEl, onMapClick);
+const handle3d = initMap(map3dEl, onMapClick, { tilted: true });
+const handle = combineHandles([handle2d, handle3d]);
 
 const tel = new Telemetry(
   document.getElementById("chart-depth")!,

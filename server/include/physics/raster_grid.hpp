@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace bathy::physics {
+namespace swordfish::physics {
 
 // ---------------------------------------------------------------------------
 // Bundled binary grid formats (.bath, .curr).
@@ -70,4 +70,4 @@ static_assert(sizeof(CurrentsHeader) == 96, "CurrentsHeader must be exactly 96 b
 
 #pragma pack(pop)
 
-} // namespace bathy::physics
+} // namespace swordfish::physics

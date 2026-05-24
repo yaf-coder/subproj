@@ -7,7 +7,7 @@
 #include <cmath>
 #include <iostream>
 
-namespace bathy::sim {
+namespace swordfish::sim {
 
 namespace {
 constexpr double kPi = 3.14159265358979323846;
@@ -583,4 +583,4 @@ planner::Plan SimulationManager::current_plan() const {
     return plan_;
 }
 
-} // namespace bathy::sim
+} // namespace swordfish::sim

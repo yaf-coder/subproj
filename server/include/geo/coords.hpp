@@ -2,7 +2,7 @@
 
 #include <Eigen/Dense>
 
-namespace bathy::geo {
+namespace swordfish::geo {
 
 struct LatLon {
     double lat_deg;
@@ -34,4 +34,4 @@ private:
 // Great-circle distance in meters (haversine).
 double great_circle_m(LatLon a, LatLon b);
 
-} // namespace bathy::geo
+} // namespace swordfish::geo

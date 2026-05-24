@@ -4,7 +4,7 @@
 
 #include <Eigen/Dense>
 
-namespace bathy::physics {
+namespace swordfish::physics {
 
 // World-frame ocean current at a given position and depth, in m/s.
 //   x = east, y = north, z = vertical (up positive)
@@ -33,4 +33,4 @@ public:
     Eigen::Vector3d velocity_at(geo::LatLon ll, double depth_m) const override;
 };
 
-} // namespace bathy::physics
+} // namespace swordfish::physics

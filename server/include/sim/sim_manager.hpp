@@ -18,7 +18,7 @@
 #include <thread>
 #include <vector>
 
-namespace bathy::sim {
+namespace swordfish::sim {
 
 // Plain-old data snapshot of the live simulation state, safe to copy out.
 struct StateSnapshot {
@@ -161,4 +161,4 @@ private:
     std::vector<StateSnapshot> history_;
 };
 
-} // namespace bathy::sim
+} // namespace swordfish::sim

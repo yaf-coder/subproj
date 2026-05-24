@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace bathy::physics {
+namespace swordfish::physics {
 
 // Thruster: a force applied at a body-frame position along a body-frame axis.
 // Magnitude is determined by a commanded normalized thrust in [-1, 1] times max_thrust_N.
@@ -207,4 +207,4 @@ struct VehicleParams {
     }
 };
 
-} // namespace bathy::physics
+} // namespace swordfish::physics

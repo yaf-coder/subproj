@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace bathy::physics {
+namespace swordfish::physics {
 
 // RasterCurrentField samples ocean currents from a preprocessed binary grid
 // (.curr file, see physics/raster_grid.hpp). At query time it trilinearly
@@ -61,4 +61,4 @@ private:
     std::vector<float> v_;
 };
 
-} // namespace bathy::physics
+} // namespace swordfish::physics

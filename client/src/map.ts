@@ -1,7 +1,7 @@
 import maplibregl, { Map, Marker, LngLatLike } from "maplibre-gl";
 import type { BathyGrid, CurrentsGrid, Plan } from "./api";
 
-const STYLE = {
+const STYLE_2D = {
   version: 8 as const,
   sources: {
     osm: {
@@ -13,6 +13,62 @@ const STYLE = {
   },
   layers: [{ id: "osm", type: "raster" as const, source: "osm" }],
 };
+
+// 3D-terrain style: OSM base tiles + the AWS Open Data "Terrain Tiles" DEM
+// (a public, no-auth, terrarium-encoded global elevation source that
+// includes bathymetry). MapLibre uses the DEM both to displace map tiles
+// vertically when `setTerrain` is enabled and to render hillshading.
+const STYLE_3D = {
+  version: 8 as const,
+  sources: {
+    osm: {
+      type: "raster" as const,
+      tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+      tileSize: 256,
+      attribution: "&copy; OpenStreetMap contributors",
+    },
+    terrain: {
+      type: "raster-dem" as const,
+      tiles: [
+        "https://elevation-tiles-prod.s3.amazonaws.com/terrarium/{z}/{x}/{y}.png",
+      ],
+      tileSize: 256,
+      encoding: "terrarium" as const,
+      maxzoom: 12,
+      attribution:
+        "Terrain tiles &copy; Mapzen / Amazon Public Datasets",
+    },
+  },
+  layers: [
+    { id: "osm", type: "raster" as const, source: "osm" },
+    // Soft hillshading on top of the base raster so the terrain reads as 3D
+    // even when the tilted view's perspective is shallow.
+    {
+      id: "hillshade",
+      type: "hillshade" as const,
+      source: "terrain",
+      paint: {
+        "hillshade-shadow-color": "#0a1620",
+        "hillshade-highlight-color": "#e4f1ff",
+        "hillshade-accent-color": "#3a78a0",
+        "hillshade-exaggeration": 0.7,
+      },
+    },
+  ],
+};
+
+export interface InitMapOpts {
+  // 3D-terrain view: tilts the camera, enables terrain raster-dem source.
+  tilted?: boolean;
+  center?: [number, number];
+  zoom?: number;
+  pitch?: number;
+  bearing?: number;
+  // For tilted maps, scales the vertical exaggeration of the terrain.
+  // 4x makes underwater features clearly readable; 1x is geometrically true
+  // but the seafloor profile looks visually flat at typical zooms.
+  terrainExaggeration?: number;
+}
 
 export interface MapHandle {
   map: Map;
@@ -29,14 +85,30 @@ export interface MapHandle {
   setCurrentsVisible(v: boolean): void;
 }
 
-export function initMap(container: HTMLElement, onClick: (lng: number, lat: number) => void): MapHandle {
+export function initMap(
+  container: HTMLElement,
+  onClick: (lng: number, lat: number) => void,
+  opts: InitMapOpts = {},
+): MapHandle {
+  const tilted = !!opts.tilted;
   const map = new maplibregl.Map({
     container,
-    style: STYLE,
-    center: [-121.89, 36.61],
-    zoom: 13,
-    pitch: 0,
+    style: tilted ? STYLE_3D : STYLE_2D,
+    center: opts.center ?? [-121.89, 36.61],
+    zoom: opts.zoom ?? (tilted ? 10 : 13),
+    pitch: opts.pitch ?? (tilted ? 62 : 0),
+    bearing: opts.bearing ?? (tilted ? 20 : 0),
+    maxPitch: tilted ? 75 : 60,
   });
+
+  if (tilted) {
+    map.on("load", () => {
+      map.setTerrain({
+        source: "terrain",
+        exaggeration: opts.terrainExaggeration ?? 4,
+      });
+    });
+  }
 
   let startMarker: Marker | null = null;
   let goalMarker: Marker | null = null;
@@ -381,5 +453,32 @@ export function initMap(container: HTMLElement, onClick: (lng: number, lat: numb
         el.style.visibility = v ? "visible" : "hidden";
       }
     },
+  };
+}
+
+// Combine multiple MapHandles into one. Shared visual operations (start
+// pin, goal pin, route, sub icon, track polyline) broadcast to every
+// handle so all maps stay in sync. Bathymetry and current-arrow overlays
+// only apply to the first handle (the 2D top-down map) — the 3D map
+// already shows bathymetry through real terrain, so a flat overlay on
+// top would be redundant.
+export function combineHandles(handles: MapHandle[]): MapHandle {
+  if (handles.length === 0) throw new Error("combineHandles needs at least one handle");
+  const primary = handles[0];
+  return {
+    map: primary.map,
+    setStart: (ll) => handles.forEach((h) => h.setStart(ll)),
+    setGoal: (ll) => handles.forEach((h) => h.setGoal(ll)),
+    setRoute: (plan) => handles.forEach((h) => h.setRoute(plan)),
+    setSub: (lng, lat, hdg) =>
+      handles.forEach((h) => h.setSub(lng, lat, hdg)),
+    appendTrack: (lng, lat) =>
+      handles.forEach((h) => h.appendTrack(lng, lat)),
+    setTrack: (coords) => handles.forEach((h) => h.setTrack(coords)),
+    clearTrack: () => handles.forEach((h) => h.clearTrack()),
+    setBathymetry: (g) => primary.setBathymetry(g),
+    setBathymetryVisible: (v) => primary.setBathymetryVisible(v),
+    setCurrents: (g) => primary.setCurrents(g),
+    setCurrentsVisible: (v) => primary.setCurrentsVisible(v),
   };
 }

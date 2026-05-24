@@ -7,7 +7,7 @@
 
 #include <string>
 
-namespace bathy::net {
+namespace swordfish::net {
 
 struct ServerConfig {
     std::string host = "0.0.0.0";
@@ -24,4 +24,4 @@ void run_server(sim::SimulationManager& mgr,
                 const physics::Bathymetry* bath = nullptr,
                 const physics::CurrentField* currents = nullptr);
 
-} // namespace bathy::net
+} // namespace swordfish::net

@@ -3,7 +3,17 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>bathyscaphe</title>
+    <title>swordfish</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Boulder-like heavy display font for the brand tile. Boulder itself
+         is a Hoefler face (not free); Bebas Neue + Bungee are the closest
+         freely-licensed alternatives on Google Fonts. -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Bungee&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
     <link rel="stylesheet" href="https://unpkg.com/uplot@1.6.31/dist/uPlot.min.css" />
     <style>
@@ -69,13 +79,57 @@
       button:disabled { opacity: 0.5; cursor: default; }
       .btn-row { display: flex; gap: 8px; }
       .btn-row > * { flex: 1; }
-      main { position: relative; height: 100%; }
-      #map { width: 100%; height: 100%; }
+      main {
+        position: relative;
+        height: 100%;
+        display: grid;
+        grid-template-rows: 1fr 1fr;
+        overflow: hidden;
+      }
+      .map-pane {
+        position: relative;
+        overflow: hidden;
+        min-height: 0;
+        border-bottom: 1px solid var(--border);
+      }
+      .map-pane:last-of-type { border-bottom: none; }
+      #map, #map-3d { width: 100%; height: 100%; }
+      .map-label {
+        position: absolute;
+        top: 8px; left: 8px;
+        padding: 3px 8px;
+        background: rgba(11, 17, 23, 0.7);
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        font-size: 10px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        pointer-events: none;
+        z-index: 2;
+      }
+      .brand-tile {
+        position: absolute;
+        top: 10px;
+        right: 12px;
+        padding: 6px 16px 4px;
+        background: rgba(220, 224, 230, 0.55);
+        border: 1px solid rgba(180, 186, 196, 0.4);
+        border-radius: 3px;
+        font-family: "Boulder", "Bungee", "Bebas Neue", "Impact", sans-serif;
+        font-size: 22px;
+        line-height: 1;
+        letter-spacing: 6px;
+        color: #2a2f36;
+        pointer-events: none;
+        z-index: 3;
+      }
       #playback-bar {
         position: absolute;
         left: 16px;
         right: 16px;
         bottom: 16px;
+        z-index: 5;
         padding: 10px 12px;
         background: rgba(11, 17, 23, 0.85);
         border: 1px solid var(--border);
@@ -191,7 +245,15 @@
       </aside>
 
       <main>
-        <div id="map"></div>
+        <div class="map-pane">
+          <div id="map"></div>
+          <div class="map-label">Top-down · 2D</div>
+          <div class="brand-tile">SWORDFISH</div>
+        </div>
+        <div class="map-pane">
+          <div id="map-3d"></div>
+          <div class="map-label">3D terrain · tilted</div>
+        </div>
         <div id="playback-bar">
           <div class="pb-row">
             <button id="pb-live" class="pb-live-btn" title="Resume live view">LIVE</button>

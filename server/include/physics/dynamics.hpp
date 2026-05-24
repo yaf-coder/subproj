@@ -6,7 +6,7 @@
 
 #include <vector>
 
-namespace bathy::physics {
+namespace swordfish::physics {
 
 // Per-thruster commands in [-1, 1]. Size must match vehicle.thrusters.size().
 using ThrusterCommands = std::vector<double>;
@@ -36,4 +36,4 @@ Derivative compute_derivatives(
     const Environment& env,
     DynamicsTelemetry& out_tel);
 
-} // namespace bathy::physics
+} // namespace swordfish::physics

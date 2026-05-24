@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace bathy::physics {
+namespace swordfish::physics {
 
 namespace {
 constexpr double kPi = 3.14159265358979323846;
@@ -143,4 +143,4 @@ Derivative compute_derivatives(
     return d;
 }
 
-} // namespace bathy::physics
+} // namespace swordfish::physics

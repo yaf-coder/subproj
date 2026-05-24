@@ -8,7 +8,7 @@
 #include <fstream>
 #include <iostream>
 
-namespace bathy::physics {
+namespace swordfish::physics {
 
 namespace {
 inline bool is_nodata(float v, float sentinel) {
@@ -285,4 +285,4 @@ Eigen::Vector3d RasterCurrentField::velocity_at(geo::LatLon ll, double depth_m) 
     return {u_out, v_out, 0.0};
 }
 
-} // namespace bathy::physics
+} // namespace swordfish::physics

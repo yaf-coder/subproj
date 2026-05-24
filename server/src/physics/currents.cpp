@@ -2,7 +2,7 @@
 
 #include <cmath>
 
-namespace bathy::physics {
+namespace swordfish::physics {
 
 namespace {
 constexpr double kPi = 3.14159265358979323846;
@@ -59,4 +59,4 @@ Eigen::Vector3d SyntheticCurrentField::velocity_at(geo::LatLon ll, double depth_
     return {u, v, 0.0};
 }
 
-} // namespace bathy::physics
+} // namespace swordfish::physics

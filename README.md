@@ -1,4 +1,4 @@
-# bathyscaphe
+# swordfish
 
 A full-stack autonomous underwater vehicle (AUV) mission simulator with a deterministic
 six-degree-of-freedom physics engine, an energy-aware land-avoiding mission planner,
@@ -193,15 +193,15 @@ physics ticks plus housekeeping) and the HTTP handlers' work is brief.
 cd server
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/bathyscaphe                       # default: bind 0.0.0.0:8080
-./build/bathyscaphe --port 8089             # custom TCP port
-./build/bathyscaphe --host 127.0.0.1        # custom bind address
-./build/bathyscaphe --land path/to.geojson  # custom land polygons
-./build/bathyscaphe --no-land               # disable LandMask
-./build/bathyscaphe --bathymetry x.bath     # custom .bath file
-./build/bathyscaphe --no-bathymetry         # procedural bathymetry only
-./build/bathyscaphe --currents x.curr       # custom .curr file
-./build/bathyscaphe --no-currents           # synthetic currents only
+./build/swordfish                       # default: bind 0.0.0.0:8080
+./build/swordfish --port 8089             # custom TCP port
+./build/swordfish --host 127.0.0.1        # custom bind address
+./build/swordfish --land path/to.geojson  # custom land polygons
+./build/swordfish --no-land               # disable LandMask
+./build/swordfish --bathymetry x.bath     # custom .bath file
+./build/swordfish --no-bathymetry         # procedural bathymetry only
+./build/swordfish --currents x.curr       # custom .curr file
+./build/swordfish --no-currents           # synthetic currents only
 ```
 
 On first start the server:
@@ -234,7 +234,7 @@ RasterBathymetry: loaded 1440x720 cells from data/earth_relief_15m.bath
 RasterCurrentField: loaded 375x355x7 from data/hycom_1deg_7depths.curr
   (bbox lat [-80,89.92] lon [0,359.04]; depth [0,500] m; surface valid=92354
    masked=40771; |c|_max=2.537 |c|_mean=0.247 m/s)
-bathyscaphe server listening on 0.0.0.0:8080
+swordfish server listening on 0.0.0.0:8080
 ```
 
 If either binary data file is missing, the server logs a notice and degrades
@@ -1016,8 +1016,32 @@ dev server.
 
 ### 9.1 Map and overlays
 
-`client/src/map.ts` initializes a MapLibre `Map` with an OSM raster style as
-the base layer. The `MapHandle` returned by `initMap()` exposes setters for
+`client/src/map.ts` initializes **two** MapLibre `Map` instances in a stacked
+top/bottom split inside the main panel:
+
+- **Top: 2D top-down view.** OSM raster base tiles, no pitch. Bathymetry
+  colormap overlay, current-arrow markers, start/goal pins, planned route,
+  orange track, sub icon.
+- **Bottom: 3D tilted terrain view.** Same OSM base tiles plus a
+  `raster-dem` source from the AWS Open Data **Mapzen Terrain Tiles**
+  (public, no-auth, terrarium-encoded global elevation, **including
+  bathymetry**), enabled via `map.setTerrain({ source: "terrain",
+  exaggeration: 4 })`. Initial camera at pitch 62°, bearing 20°. A
+  hillshade layer on top of OSM gives the terrain visible relief even in
+  shallow-perspective views. The same route, track, sub, start/goal pins
+  are mirrored from the 2D map.
+
+Clicks on **either** map place start/goal — both maps share an
+`onMapClick(lng, lat)` handler. The maps pan and zoom independently
+(no synchronized viewport) so the user can keep a fixed top-down view
+while orbiting the 3D terrain underneath.
+
+A small composite helper, `combineHandles([handle2d, handle3d])` in
+`map.ts`, wraps both maps into one `MapHandle` whose shared visualization
+methods (`setStart`, `setGoal`, `setRoute`, `setSub`, `setTrack`,
+`clearTrack`) broadcast to both. Bathymetry colormap and current-arrow
+overlays only apply to the 2D map — the 3D map renders bathymetry through
+real terrain, so a flat overlay on top would be redundant. The `MapHandle` returned by `initMap()` exposes setters for
 every overlay artifact (start/goal pins, planned route line, route waypoint
 dots, sub marker, actual track, bathymetry raster, current arrows).
 

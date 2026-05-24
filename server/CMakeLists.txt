@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(bathyscaphe CXX)
+project(swordfish CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -25,7 +25,7 @@ FetchContent_MakeAvailable(Eigen)
 
 find_package(Threads REQUIRED)
 
-add_executable(bathyscaphe
+add_executable(swordfish
     src/main.cpp
     src/physics/bathymetry.cpp
     src/physics/currents.cpp
@@ -41,13 +41,13 @@ add_executable(bathyscaphe
     src/net/server.cpp
 )
 
-target_include_directories(bathyscaphe
+target_include_directories(swordfish
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party
 )
 
-target_link_libraries(bathyscaphe
+target_link_libraries(swordfish
     PRIVATE
         Eigen3::Eigen
         Threads::Threads

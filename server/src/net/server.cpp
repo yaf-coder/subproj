@@ -10,7 +10,7 @@
 #include <string>
 #include <thread>
 
-namespace bathy::net {
+namespace swordfish::net {
 
 namespace {
 
@@ -426,8 +426,8 @@ void run_server(sim::SimulationManager& mgr,
             });
     });
 
-    std::cerr << "bathyscaphe server listening on " << cfg.host << ":" << cfg.port << "\n";
+    std::cerr << "swordfish server listening on " << cfg.host << ":" << cfg.port << "\n";
     svr.listen(cfg.host, cfg.port);
 }
 
-} // namespace bathy::net
+} // namespace swordfish::net

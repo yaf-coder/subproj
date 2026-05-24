@@ -3,7 +3,7 @@
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 
-namespace bathy::physics {
+namespace swordfish::physics {
 
 // World frame: ENU (East-North-Up) local tangent plane at the mission origin.
 // Body frame: x-forward, y-port (left), z-up. (Standard right-handed.)
@@ -46,4 +46,4 @@ struct Derivative {
     double ddistance = 0.0;
 };
 
-} // namespace bathy::physics
+} // namespace swordfish::physics

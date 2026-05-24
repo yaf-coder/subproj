@@ -2,7 +2,7 @@
 
 #include "physics/vehicle.hpp"
 
-namespace bathy::physics {
+namespace swordfish::physics {
 
 struct MotorOutput {
     double power_mech_W;
@@ -25,4 +25,4 @@ struct BatteryReading {
 // the voltage sag, and the rate of change of SoC and temperature.
 BatteryReading battery_step(const BatteryParams& b, double power_demand_W, double soc, double T);
 
-} // namespace bathy::physics
+} // namespace swordfish::physics

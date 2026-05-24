@@ -28,7 +28,7 @@ std::vector<std::string> path_candidates(const std::string& base) {
 } // namespace
 
 int main(int argc, char** argv) {
-    bathy::net::ServerConfig cfg;
+    swordfish::net::ServerConfig cfg;
     // Default to the higher-resolution 1:10m land polygons for accurate coastal
     // demos; the 1:50m file is kept as a fallback if 10m is missing.
     std::string land_path = "data/ne_10m_land.geojson";
@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
             want_raster_curr = false;
         } else if (a == "--help" || a == "-h") {
             std::cout <<
-                "usage: bathyscaphe [options]\n"
+                "usage: swordfish [options]\n"
                 "  --host H              bind address (default 0.0.0.0)\n"
                 "  --port P              port (default 8080)\n"
                 "  --land PATH           land polygon GeoJSON (default ne_10m)\n"
@@ -72,7 +72,7 @@ int main(int argc, char** argv) {
     }
 
     // ---- Land mask ------------------------------------------------------
-    bathy::geo::LandMask land;
+    swordfish::geo::LandMask land;
     if (!land_path.empty()) {
         std::vector<std::string> candidates = path_candidates(land_path);
         for (const auto& p : path_candidates(land_fallback)) candidates.push_back(p);
@@ -88,14 +88,14 @@ int main(int argc, char** argv) {
 
     // ---- Bathymetry: procedural is the always-available fallback;
     //                  raster is a higher-fidelity overlay when available.
-    std::unique_ptr<bathy::physics::ProceduralBathymetry> proc_bath;
+    std::unique_ptr<swordfish::physics::ProceduralBathymetry> proc_bath;
     if (land.loaded()) {
-        proc_bath = std::make_unique<bathy::physics::ProceduralBathymetry>(land);
+        proc_bath = std::make_unique<swordfish::physics::ProceduralBathymetry>(land);
     }
-    std::unique_ptr<bathy::physics::RasterBathymetry> raster_bath;
-    const bathy::physics::Bathymetry* effective_bath = proc_bath.get();
+    std::unique_ptr<swordfish::physics::RasterBathymetry> raster_bath;
+    const swordfish::physics::Bathymetry* effective_bath = proc_bath.get();
     if (want_raster_bath) {
-        raster_bath = std::make_unique<bathy::physics::RasterBathymetry>(proc_bath.get());
+        raster_bath = std::make_unique<swordfish::physics::RasterBathymetry>(proc_bath.get());
         bool ok = false;
         for (const auto& p : path_candidates(bath_path)) {
             if (raster_bath->load_file(p)) { ok = true; break; }
@@ -112,11 +112,11 @@ int main(int argc, char** argv) {
 
     // ---- Currents: synthetic field is the fallback; HYCOM raster
     //                overrides where available.
-    bathy::physics::SyntheticCurrentField synth_curr;
-    std::unique_ptr<bathy::physics::RasterCurrentField> raster_curr;
-    const bathy::physics::CurrentField* effective_curr = &synth_curr;
+    swordfish::physics::SyntheticCurrentField synth_curr;
+    std::unique_ptr<swordfish::physics::RasterCurrentField> raster_curr;
+    const swordfish::physics::CurrentField* effective_curr = &synth_curr;
     if (want_raster_curr) {
-        raster_curr = std::make_unique<bathy::physics::RasterCurrentField>(&synth_curr);
+        raster_curr = std::make_unique<swordfish::physics::RasterCurrentField>(&synth_curr);
         bool ok = false;
         for (const auto& p : path_candidates(curr_path)) {
             if (raster_curr->load_file(p)) { ok = true; break; }
@@ -132,13 +132,13 @@ int main(int argc, char** argv) {
     }
 
     // ---- Sim + server wiring -------------------------------------------
-    bathy::sim::SimulationManager mgr;
+    swordfish::sim::SimulationManager mgr;
     mgr.set_land_mask(land.loaded() ? &land : nullptr);
     mgr.set_bathymetry(effective_bath);
     mgr.set_currents(effective_curr);
     mgr.start_loop();
 
-    bathy::net::run_server(mgr, cfg,
+    swordfish::net::run_server(mgr, cfg,
                            land.loaded() ? &land : nullptr,
                            effective_bath,
                            effective_curr);
