@@ -176,26 +176,24 @@ export function initMap(container: HTMLElement, onClick: (lng: number, lat: numb
   }
 
   // ----- Currents: SVG arrow marker -------------------------------------
+  //
+  // The element returned here is a horizontal right-pointing arrow. The
+  // rotation that turns it into the actual current direction is applied via
+  // `marker.setRotation()` on the MapLibre Marker — *not* via CSS on this
+  // element. MapLibre's Marker internally calls DOM.setTransform on the
+  // element you pass in to position it, which overwrites any
+  // `transform: rotate(...)` you set here. Letting MapLibre own the
+  // transform string (and adding rotation through its API) is the only way
+  // to keep both translate and rotate composing correctly.
   function arrowEl(u: number, v: number, magMax: number): HTMLElement {
     const el = document.createElement("div");
     const mag = Math.hypot(u, v);
-
-    // CSS rotate() is clockwise-positive in a y-down screen coord system.
-    // To make a right-pointing line represent a current vector (u east, v
-    // north), we want CSS rotation = atan2(-v, u). In degrees that equals
-    // (bearing - 90), where bearing = atan2(u, v) is the standard
-    // compass bearing (0 = N, 90 = E).
-    const rotation_deg =
-      (Math.atan2(-v, u) * 180) / Math.PI;
-
     const length = 8 + 24 * Math.min(1, mag / Math.max(0.05, magMax));
     el.style.cssText = `
       position: relative;
       width: ${length}px; height: 2px;
       background: linear-gradient(to right, rgba(255,255,255,0.35) 0%, #ffe070 100%);
       border-radius: 1px;
-      transform: rotate(${rotation_deg}deg);
-      transform-origin: 0% 50%;
       pointer-events: none;
     `;
     // Arrowhead at the tip.
@@ -220,6 +218,16 @@ export function initMap(container: HTMLElement, onClick: (lng: number, lat: numb
     `;
     el.appendChild(tail);
     return el;
+  }
+
+  // Compass bearing from a (u east, v north) current vector. MapLibre's
+  // `Marker.setRotation()` rotates the marker clockwise around its anchor
+  // by this angle, with 0° meaning "no rotation" (the element's natural
+  // orientation). Our element is a right-pointing arrow at 0°, which
+  // represents an east-bound current (bearing 90°). To make it point at
+  // bearing B we therefore rotate by (B − 90°).
+  function arrowRotationDeg(u: number, v: number): number {
+    return (Math.atan2(u, v) * 180) / Math.PI - 90;
   }
 
   return {
@@ -339,9 +347,19 @@ export function initMap(container: HTMLElement, onClick: (lng: number, lat: numb
           const el = arrowEl(u, v, magMax);
           // Anchor "left" puts the lat/lon at the LEFT-CENTER of the marker
           // element, which is the arrow's tail (the geometrically correct
-          // place for a vector-field sample).
-          const marker = new maplibregl.Marker({ element: el, anchor: "left" })
+          // place for a vector-field sample). MapLibre rotates the marker
+          // around the anchor, so the tail stays pinned to the sample point
+          // and the head swings to the current direction.
+          // rotationAlignment "map" makes the arrow rotate with map bearing
+          // (currently always 0 since we don't rotate the map, but correct
+          // for the day we do).
+          const marker = new maplibregl.Marker({
+              element: el,
+              anchor: "left",
+              rotationAlignment: "map",
+          })
             .setLngLat([lon, lat])
+            .setRotation(arrowRotationDeg(u, v))
             .addTo(map);
           currentMarkers.push(marker);
         }
