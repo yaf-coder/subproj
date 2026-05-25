@@ -58,14 +58,14 @@ two communicate over HTTP plus Server-Sent Events (SSE) for live state streaming
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ Browser (TypeScript + Vite)                                             │
-│   ┌─────────────┐  ┌──────────────┐  ┌────────────────────────────────┐│
-│   │ MapLibre GL │  │ Vehicle &    │  │ Telemetry panel + uPlot charts ││
-│   │   OSM tiles │  │  mission cfg │  │                                ││
-│   │   route     │  │ Overlays UI  │  │ depth(t), power(t)+SoC(t)      ││
-│   │   track     │  └──────────────┘  └────────────────────────────────┘│
-│   │   bathy raster overlay (canvas → image source)                     │
+│   ┌─────────────┐  ┌──────────────┐  ┌────────────────────────────────┐ │
+│   │ MapLibre GL │  │ Vehicle &    │  │ Telemetry panel + uPlot charts │ │
+│   │   OSM tiles │  │  mission cfg │  │                                │ │
+│   │   route     │  │ Overlays UI  │  │ depth(t), power(t)+SoC(t)      │ │
+│   │   track     │  └──────────────┘  └────────────────────────────────┘ │
+│   │   bathy raster overlay (canvas → image source)                      │
 │   │   currents arrow markers                                            │
-│   │   playback bar — scrub spans full precomputed range                │
+│   │   playback bar — scrub spans full precomputed range                 │
 │   └─────────────┘                                                       │
 └──────────────────────────────▲──────────────────────────────────────────┘
                   REST + SSE   │   /api/{mission, control, stream, ...}
@@ -73,7 +73,7 @@ two communicate over HTTP plus Server-Sent Events (SSE) for live state streaming
 ┌──────────────────────────────▼──────────────────────────────────────────┐
 │ Server (C++17, single binary)                                           │
 │                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
 │  │ SimulationManager (precompute-then-replay)                       │   │
 │  │                                                                  │   │
 │  │   precompute_thread_  (background, ~125× real-time)              │   │
@@ -83,16 +83,16 @@ two communicate over HTTP plus Server-Sent Events (SSE) for live state streaming
 │  │   ────────────────► cursor_t_s_ += dt_wall * speed_              │   │
 │  │                                                                  │   │
 │  │   snapshot() = lerp(history_[i], history_[i+1]) at cursor_t_s_   │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
+│  └──────────────────────────────────────────────────────────────────┘   │
 │           ▲                                ▲                            │
 │           │ uses                           │ uses                       │
-│  ┌────────┴──────────┐         ┌──────────┴──────────────────────────┐ │
-│  │ Planner            │         │ HTTP/SSE (cpp-httplib)             │ │
-│  │  - great-circle    │         │  - /api/{mission, control,         │ │
-│  │  - A* land-avoid   │         │     snapshot, plan, stream,        │ │
-│  └────────────────────┘         │     history, bathymetry, currents, │ │
-│                                 │     vehicle, health}               │ │
-│                                 └────────────────────────────────────┘ │
+│  ┌────────┴──────────┐         ┌──────────┴───────────────────────────┐ │
+│  │ Planner           │         │   HTTP/SSE (cpp-httplib)             │ │
+│  │  - great-circle   │         │    - /api/{mission, control,         │ │
+│  │  - A* land-avoid  │         │       snapshot, plan, stream,        │ │
+│  └───────────────────┘         │       history, bathymetry, currents, │ │
+│                                │       vehicle, health}               │ │
+│                                └──────────────────────────────────────┘ │
 │  ┌─────────────────────────────────────────────────────────────────┐    │
 │  │ Physics: dynamics, integrator, powertrain                       │    │
 │  └─────────────────────────────────────────────────────────────────┘    │
