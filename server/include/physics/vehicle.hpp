@@ -52,6 +52,11 @@ struct BatteryParams {
 struct HullParams {
     double mass_kg = 25.0;                            // dry mass
     double volume_m3 = 0.025;                         // displaced volume (sets buoyancy)
+    // Vertical extent of the hull (top-to-bottom in body frame). Used to
+    // taper buoyancy as the sub crosses the sea surface so a positively-
+    // buoyant vehicle settles at the surface instead of accelerating into
+    // the air. For a horizontal cylinder this is just the diameter.
+    double wetted_height_m = 0.20;
     Eigen::Vector3d cog_b = Eigen::Vector3d::Zero();  // center of gravity, body frame
     Eigen::Vector3d cob_b = {0.0, 0.0, 0.02};         // center of buoyancy, body frame
                                                       // (slightly above CG => self-righting)
@@ -129,10 +134,11 @@ struct VehicleParams {
         const double vol_hull = kPiV * R * R * L;
         (void)vol_hull;
 
-        v.hull.mass_kg    = m;
-        v.hull.volume_m3  = vol;
-        v.hull.cog_b      = {0.0, 0.0, 0.0};
-        v.hull.cob_b      = {0.0, 0.0, 0.025 * R / 0.10}; // CB above CG, scales with R
+        v.hull.mass_kg         = m;
+        v.hull.volume_m3       = vol;
+        v.hull.wetted_height_m = 2.0 * R;                 // hull diameter
+        v.hull.cog_b           = {0.0, 0.0, 0.0};
+        v.hull.cob_b           = {0.0, 0.0, 0.025 * R / 0.10}; // CB above CG, scales with R
 
         // Inertia: solid cylinder about longitudinal axis (Ix),
         // thin-rod approximation about transverse axes (Iy, Iz).

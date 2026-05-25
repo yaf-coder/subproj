@@ -57,6 +57,36 @@ const STYLE_3D = {
   ],
 };
 
+// Draw an "arrow pointing up" (north) into a small canvas and return its
+// ImageData. The symbol layer rotates this base image per-feature using
+// `icon-rotate` (clockwise compass-bearing degrees), so the source image
+// needs to point north at rotate=0.
+function makeArrowImageData(): ImageData {
+  const W = 20;
+  const H = 50;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d")!;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = "#ffe070";
+  // Body: vertical line from y=H-4 (just above the bottom) up to y=14
+  // (just below the arrowhead).
+  ctx.fillRect(W / 2 - 1.5, 14, 3, H - 18);
+  // Arrowhead at the top.
+  ctx.beginPath();
+  ctx.moveTo(W / 2, 2);
+  ctx.lineTo(W / 2 - 7, 16);
+  ctx.lineTo(W / 2 + 7, 16);
+  ctx.closePath();
+  ctx.fill();
+  // Tail dot at the bottom — marks the sample point.
+  ctx.beginPath();
+  ctx.arc(W / 2, H - 3, 2.5, 0, Math.PI * 2);
+  ctx.fill();
+  return ctx.getImageData(0, 0, W, H);
+}
+
 export interface InitMapOpts {
   // 3D-terrain view: tilts the camera, enables terrain raster-dem source.
   tilted?: boolean;
@@ -114,9 +144,7 @@ export function initMap(
   let goalMarker: Marker | null = null;
   let subMarker: Marker | null = null;
   const trackCoords: [number, number][] = [];
-  const currentMarkers: Marker[] = [];
   let bathyVisible = true;
-  let currentsVisible = true;
 
   map.on("load", () => {
     // Bathymetry image source — added/updated lazily by setBathymetry().
@@ -154,6 +182,39 @@ export function initMap(
       type: "line",
       source: "track",
       paint: { "line-color": "#ffa000", "line-width": 2 },
+    });
+
+    // Register a per-pixel "arrow" image and add the currents symbol layer.
+    // The arrow is drawn vertically (pointing UP / north) so that
+    // icon-rotate=bearing degrees rotates clockwise from the natural
+    // north-pointing orientation — which matches MapLibre's symbol
+    // rotation convention out of the box.
+    if (!map.hasImage("current-arrow")) {
+      map.addImage("current-arrow", makeArrowImageData());
+    }
+    map.addSource("currents", { type: "geojson", data: emptyFC() });
+    map.addLayer({
+      id: "currents-layer",
+      type: "symbol",
+      source: "currents",
+      layout: {
+        "icon-image": "current-arrow",
+        "icon-rotate": ["get", "bearing"],
+        "icon-size": ["get", "mag_scale"],
+        // icon-anchor: bottom puts the lat/lon at the tail of the arrow
+        // (the natural vector-field convention: tail at sample point,
+        // head pointing in flow direction).
+        "icon-anchor": "bottom",
+        "icon-rotation-alignment": "map",
+        "icon-pitch-alignment": "map",
+        // Allow every sample to render regardless of icon overlap;
+        // currents are a regular grid so overlap is expected.
+        "icon-allow-overlap": true,
+        "icon-ignore-placement": true,
+      },
+      paint: {
+        "icon-opacity": 0.7,
+      },
     });
   });
 
@@ -246,61 +307,6 @@ export function initMap(
     }
     ctx.putImageData(img, 0, 0);
     return canvas;
-  }
-
-  // ----- Currents: SVG arrow marker -------------------------------------
-  //
-  // The element returned here is a horizontal right-pointing arrow. The
-  // rotation that turns it into the actual current direction is applied via
-  // `marker.setRotation()` on the MapLibre Marker — *not* via CSS on this
-  // element. MapLibre's Marker internally calls DOM.setTransform on the
-  // element you pass in to position it, which overwrites any
-  // `transform: rotate(...)` you set here. Letting MapLibre own the
-  // transform string (and adding rotation through its API) is the only way
-  // to keep both translate and rotate composing correctly.
-  function arrowEl(u: number, v: number, magMax: number): HTMLElement {
-    const el = document.createElement("div");
-    const mag = Math.hypot(u, v);
-    const length = 8 + 24 * Math.min(1, mag / Math.max(0.05, magMax));
-    el.style.cssText = `
-      position: relative;
-      width: ${length}px; height: 2px;
-      background: linear-gradient(to right, rgba(255,255,255,0.35) 0%, #ffe070 100%);
-      border-radius: 1px;
-      pointer-events: none;
-    `;
-    // Arrowhead at the tip.
-    const head = document.createElement("span");
-    head.style.cssText = `
-      position: absolute;
-      left: ${length - 6}px; top: -3px;
-      width: 0; height: 0;
-      border-left: 7px solid #ffe070;
-      border-top: 4px solid transparent;
-      border-bottom: 4px solid transparent;
-    `;
-    el.appendChild(head);
-    // Small dot at the tail to mark the actual sample location.
-    const tail = document.createElement("span");
-    tail.style.cssText = `
-      position: absolute;
-      left: -2px; top: -2px;
-      width: 5px; height: 5px;
-      border-radius: 50%;
-      background: rgba(255, 224, 112, 0.55);
-    `;
-    el.appendChild(tail);
-    return el;
-  }
-
-  // Compass bearing from a (u east, v north) current vector. MapLibre's
-  // `Marker.setRotation()` rotates the marker clockwise around its anchor
-  // by this angle, with 0° meaning "no rotation" (the element's natural
-  // orientation). Our element is a right-pointing arrow at 0°, which
-  // represents an east-bound current (bearing 90°). To make it point at
-  // bearing B we therefore rotate by (B − 90°).
-  function arrowRotationDeg(u: number, v: number): number {
-    return (Math.atan2(u, v) * 180) / Math.PI - 90;
   }
 
   return {
@@ -403,54 +409,68 @@ export function initMap(
       }
     },
 
+    // ----- Currents (symbol layer, not HTML markers) ---------------------
+    //
+    // Currents are rendered as a MapLibre symbol layer backed by a GeoJSON
+    // point source. Each sample is a Point feature with `bearing` and
+    // `mag_scale` properties; the symbol layer rotates and scales an
+    // "arrow" icon image per-feature. The icon is registered once on map
+    // load. Because the symbol layer is part of the map's WebGL render
+    // pipeline (not separately-positioned HTML overlays), MapLibre's own
+    // projection handles the placement and there are no resize, layout, or
+    // DOM-anchoring failure modes.
     setCurrents(grid) {
-      // Remove old markers and recreate. With ~12x8 = 96 markers this is
-      // cheap; if it ever isn't we can diff.
-      for (const m of currentMarkers) m.remove();
-      currentMarkers.length = 0;
-      if (!grid || !currentsVisible) return;
-      // Find max magnitude for arrow scaling.
+      const src = map.getSource("currents") as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      if (!src) return;
+      if (!grid) {
+        src.setData(emptyFC());
+        return;
+      }
       let magMax = 0;
       for (let k = 0; k < grid.u.length; k++) {
         const m = Math.hypot(grid.u[k], grid.v[k]);
         if (m > magMax) magMax = m;
       }
       magMax = Math.max(0.05, magMax);
+      const features: GeoJSON.Feature[] = [];
       for (let j = 0; j < grid.height; j++) {
-        const lat = grid.lat_min + ((grid.lat_max - grid.lat_min) * (j + 0.5)) / grid.height;
+        const lat =
+          grid.lat_min +
+          ((grid.lat_max - grid.lat_min) * (j + 0.5)) / grid.height;
         for (let i = 0; i < grid.width; i++) {
-          const lon = grid.lon_min + ((grid.lon_max - grid.lon_min) * (i + 0.5)) / grid.width;
+          const lon =
+            grid.lon_min +
+            ((grid.lon_max - grid.lon_min) * (i + 0.5)) / grid.width;
           const idx = j * grid.width + i;
           const u = grid.u[idx];
           const v = grid.v[idx];
-          if (Math.hypot(u, v) < 0.005) continue;
-          const el = arrowEl(u, v, magMax);
-          // Anchor "left" puts the lat/lon at the LEFT-CENTER of the marker
-          // element, which is the arrow's tail (the geometrically correct
-          // place for a vector-field sample). MapLibre rotates the marker
-          // around the anchor, so the tail stays pinned to the sample point
-          // and the head swings to the current direction.
-          // rotationAlignment "map" makes the arrow rotate with map bearing
-          // (currently always 0 since we don't rotate the map, but correct
-          // for the day we do).
-          const marker = new maplibregl.Marker({
-              element: el,
-              anchor: "left",
-              rotationAlignment: "map",
-          })
-            .setLngLat([lon, lat])
-            .setRotation(arrowRotationDeg(u, v))
-            .addTo(map);
-          currentMarkers.push(marker);
+          const mag = Math.hypot(u, v);
+          if (mag < 0.005) continue;
+          // Compass bearing of the (u east, v north) vector. atan2(u, v)
+          // gives 0 for due-north, 90 for due-east — same convention as
+          // MapLibre's icon-rotate property.
+          const bearing =
+            ((Math.atan2(u, v) * 180) / Math.PI + 360) % 360;
+          const mag_scale = 0.35 + 0.65 * Math.min(1, mag / magMax);
+          features.push({
+            type: "Feature",
+            properties: { bearing, mag_scale },
+            geometry: { type: "Point", coordinates: [lon, lat] },
+          });
         }
       }
+      src.setData({ type: "FeatureCollection", features });
     },
 
     setCurrentsVisible(v) {
-      currentsVisible = v;
-      for (const m of currentMarkers) {
-        const el = m.getElement();
-        el.style.visibility = v ? "visible" : "hidden";
+      if (map.getLayer("currents-layer")) {
+        map.setLayoutProperty(
+          "currents-layer",
+          "visibility",
+          v ? "visible" : "none",
+        );
       }
     },
   };

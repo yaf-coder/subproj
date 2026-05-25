@@ -63,8 +63,24 @@ Derivative compute_derivatives(
 
     // ----- Gravity & buoyancy (restoring) -----
     // Body frame origin == CG by convention.
+    //
+    // Buoyancy is scaled by the *submerged fraction* of the hull's vertical
+    // extent — when the centerline is more than half_h below the surface
+    // (z + half_h <= 0) the vehicle is fully submerged and buoyancy is
+    // ρ·V·g; when the centerline is more than half_h above the surface,
+    // buoyancy is zero (the vehicle is displacing air); in between it
+    // tapers linearly. This is what stops a positively-buoyant sub from
+    // accelerating into the air past z = 0, and what gives a controller
+    // commanded to hold depth = 0 a stable equilibrium near the surface
+    // instead of an unwinnable fight against constant upward force.
     const double Fg = h.mass_kg * env.g;
-    const double Fb_mag = env.rho_water * h.volume_m3 * env.g;
+    const double half_h = 0.5 * std::max(h.wetted_height_m, 1e-3);
+    const double z_center = s.p_w.z(); // world z is up; submerged => z < 0
+    double frac_submerged;
+    if (z_center + half_h <= 0.0)      frac_submerged = 1.0;
+    else if (z_center - half_h >= 0.0) frac_submerged = 0.0;
+    else                               frac_submerged = (half_h - z_center) / (2.0 * half_h);
+    const double Fb_mag = env.rho_water * h.volume_m3 * env.g * frac_submerged;
     const Eigen::Vector3d Fg_w(0.0, 0.0, -Fg);
     const Eigen::Vector3d Fb_w(0.0, 0.0, Fb_mag);
     const Eigen::Vector3d Fg_b = R.transpose() * Fg_w;

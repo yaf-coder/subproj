@@ -48,6 +48,7 @@ const handle2d = initMap(mapEl, onMapClick);
 const handle3d = initMap(map3dEl, onMapClick, { tilted: true });
 const handle = combineHandles([handle2d, handle3d]);
 
+
 const tel = new Telemetry(
   document.getElementById("chart-depth")!,
   document.getElementById("chart-power")!,
@@ -404,13 +405,18 @@ const ovCurrEl = document.getElementById("ov-curr") as HTMLInputElement;
 ovBathEl.addEventListener("change", () => handle.setBathymetryVisible(ovBathEl.checked));
 ovCurrEl.addEventListener("change", () => handle.setCurrentsVisible(ovCurrEl.checked));
 
+// Returns a bbox covering the visible 2D map viewport, with a small skirt
+// so the cell-center-sampled overlay reaches the viewport edges.
 function viewportBboxGrid(): BboxGrid {
   const b = handle.map.getBounds();
+  const lat_span = b.getNorth() - b.getSouth();
+  const lon_span = b.getEast() - b.getWest();
+  const pad = 0.05;
   return {
-    lat_min: b.getSouth(),
-    lon_min: b.getWest(),
-    lat_max: b.getNorth(),
-    lon_max: b.getEast(),
+    lat_min: b.getSouth() - lat_span * pad,
+    lon_min: b.getWest() - lon_span * pad,
+    lat_max: b.getNorth() + lat_span * pad,
+    lon_max: b.getEast() + lon_span * pad,
     width: 80,
     height: 56,
   };
@@ -427,7 +433,10 @@ function scheduleOverlayRefresh(immediate = false) {
   const run = async () => {
     refreshTimer = null;
     const bath_bbox = viewportBboxGrid();
-    const curr_bbox: BboxGrid = { ...bath_bbox, width: 14, height: 10 };
+    // Denser current grid than before (20x14 instead of 14x10): tighter
+    // arrow spacing, ~280 markers vs ~140 — still well within MapLibre's
+    // marker rendering envelope.
+    const curr_bbox: BboxGrid = { ...bath_bbox, width: 20, height: 14 };
     const key = [
       bath_bbox.lat_min.toFixed(3),
       bath_bbox.lon_min.toFixed(3),

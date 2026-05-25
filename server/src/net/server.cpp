@@ -294,7 +294,7 @@ void run_server(sim::SimulationManager& mgr,
         res.set_content(body, "application/json");
     });
 
-    svr.Get("/api/currents", [&mgr, currents, land, parse_bbox]
+    svr.Get("/api/currents", [&mgr, currents, land, bath, parse_bbox]
             (const httplib::Request& req, httplib::Response& res) {
         (void)mgr;
         add_cors(res);
@@ -328,9 +328,14 @@ void run_server(sim::SimulationManager& mgr,
             const double lat = lat_min + (lat_max - lat_min) * (j + 0.5) / ny;
             for (int i = 0; i < nx; ++i) {
                 const double lon = lon_min + (lon_max - lon_min) * (i + 0.5) / nx;
+                // No land gate here — we want uniform visual coverage of
+                // the viewport, including over technically-land cells where
+                // the raster source returns nodata. The RasterCurrentField
+                // already falls back to the SyntheticCurrentField on
+                // nodata, which produces non-zero values everywhere, so the
+                // overlay reads consistently across the whole tile.
                 Eigen::Vector3d c = Eigen::Vector3d::Zero();
-                const bool on_land = land && land->loaded() && land->is_land(lat, lon);
-                if (!on_land && currents) c = currents->velocity_at({lat, lon}, depth_m);
+                if (currents) c = currents->velocity_at({lat, lon}, depth_m);
                 us.push_back(c.x());
                 vs.push_back(c.y());
             }
